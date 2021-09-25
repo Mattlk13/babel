@@ -5,12 +5,12 @@
 
 import getV8Flags from "v8flags";
 import path from "path";
+import child_process from "child_process";
+import { fileURLToPath } from "url";
 
-// TODO: When support for node < 10.10 will be dropped, this package
-// can be replaced with process.allowedNodeEnvironmentFlags
-import allowedNodeEnvironmentFlags from "node-environment-flags";
-
-let args = [path.join(__dirname, "_babel-node")];
+const args = [
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "_babel-node"),
+];
 
 let babelArgs = process.argv.slice(2);
 let userArgs;
@@ -45,7 +45,7 @@ const aliases = new Map([
   ["-gc", "--expose-gc"],
 ]);
 
-getV8Flags(function (err, v8Flags) {
+getV8Flags(async function (err, v8Flags) {
   for (let i = 0; i < babelArgs.length; i++) {
     const arg = babelArgs[i];
     const flag = arg.split("=")[0];
@@ -59,7 +59,7 @@ getV8Flags(function (err, v8Flags) {
       flag === "debug" || // node debug foo.js
       flag === "inspect" ||
       v8Flags.indexOf(getNormalizedV8Flag(flag)) >= 0 ||
-      allowedNodeEnvironmentFlags.has(flag)
+      process.allowedNodeEnvironmentFlags.has(flag)
     ) {
       args.unshift(arg);
     } else {
@@ -69,23 +69,27 @@ getV8Flags(function (err, v8Flags) {
 
   // append arguments passed after --
   if (argSeparator > -1) {
-    args = args.concat(userArgs);
+    args.push(...userArgs);
   }
 
   try {
-    const kexec = require("kexec");
+    const { default: kexec } = await import("kexec");
     kexec(process.argv[0], args);
   } catch (err) {
     if (
+      err.code !== "ERR_MODULE_NOT_FOUND" &&
       err.code !== "MODULE_NOT_FOUND" &&
       err.code !== "UNDECLARED_DEPENDENCY"
     ) {
       throw err;
     }
 
-    const child_process = require("child_process");
+    // passthrough IPC only if babel-node itself has an IPC channel
+    const shouldPassthroughIPC = process.send !== undefined;
     const proc = child_process.spawn(process.argv[0], args, {
-      stdio: "inherit",
+      stdio: shouldPassthroughIPC
+        ? ["inherit", "inherit", "inherit", "ipc"]
+        : "inherit",
     });
     proc.on("exit", function (code, signal) {
       process.on("exit", function () {
@@ -96,6 +100,10 @@ getV8Flags(function (err, v8Flags) {
         }
       });
     });
+    if (shouldPassthroughIPC) {
+      proc.on("message", message => process.send(message));
+    }
     process.on("SIGINT", () => proc.kill("SIGINT"));
+    process.on("SIGTERM", () => proc.kill("SIGTERM"));
   }
 });

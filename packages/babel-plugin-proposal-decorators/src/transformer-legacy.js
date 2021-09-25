@@ -33,9 +33,10 @@ const WARNING_CALLS = new WeakSet();
  */
 function applyEnsureOrdering(path) {
   // TODO: This should probably also hoist computed properties.
-  const decorators = (path.isClass()
-    ? [path].concat(path.get("body.body"))
-    : path.get("properties")
+  const decorators = (
+    path.isClass()
+      ? [path].concat(path.get("body.body"))
+      : path.get("properties")
   ).reduce((acc, prop) => acc.concat(prop.node.decorators || []), []);
 
   const identDecorators = decorators.filter(
@@ -47,9 +48,8 @@ function applyEnsureOrdering(path) {
     identDecorators
       .map(decorator => {
         const expression = decorator.expression;
-        const id = (decorator.expression = path.scope.generateDeclaredUidIdentifier(
-          "dec",
-        ));
+        const id = (decorator.expression =
+          path.scope.generateDeclaredUidIdentifier("dec"));
         return t.assignmentExpression("=", id, expression);
       })
       .concat([path.node]),
@@ -157,7 +157,7 @@ function applyTargetDecorators(path, state, decoratedProps) {
 
       WARNING_CALLS.add(node.value);
 
-      acc = acc.concat([
+      acc.push(
         t.assignmentExpression(
           "=",
           t.cloneNode(descriptor),
@@ -184,9 +184,9 @@ function applyTargetDecorators(path, state, decoratedProps) {
             ]),
           ]),
         ),
-      ]);
+      );
     } else {
-      acc = acc.concat(
+      acc.push(
         t.callExpression(state.addHelper("applyDecoratedDescriptor"), [
           t.cloneNode(target),
           t.cloneNode(property),

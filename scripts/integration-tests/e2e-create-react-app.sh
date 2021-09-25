@@ -17,6 +17,11 @@ set -x
 git clone --depth=1 https://github.com/facebook/create-react-app.git tmp/create-react-app
 cd tmp/create-react-app || exit
 
+# CircleCI already has npm 7
+if [ "$BABEL_8_BREAKING" != true ] ; then
+  npm i -g npm@7
+fi
+
 #==============================================================================#
 #                                   TEST                                       #
 #==============================================================================#
@@ -28,6 +33,13 @@ cd tmp/create-react-app || exit
 # This change replaces useBuiltIns: true with runtime: "classic"
 sed -i 's/useBuiltIns: true/runtime: "classic"/' packages/babel-preset-react-app/create.js
 
+# create-react-app throws if `@babel/eslint-parser` is not pinned, but we
+# must upgrade it for test purposes
+sed -i "s#'@babel/eslint-parser',##" packages/react-scripts/scripts/utils/verifyPackageTree.js
+
+# remove this line when https://github.com/facebook/create-react-app/pull/11216 gets merged
+sed -i "s#isESLintPluginEnabled && 'babel-eslint',##" packages/react-scripts/scripts/utils/verifyPackageTree.js
+
 bump_deps="$PWD/../../utils/bump-babel-dependencies.js"
 node "$bump_deps"
 for d in ./packages/*/
@@ -35,14 +47,10 @@ do
   (cd "$d"; node "$bump_deps")
 done
 
-# Don't use Yarn 2
-export YARN_IGNORE_PATH=1
-
 startLocalRegistry "$PWD"/../../verdaccio-config.yml
-yarn install
+npm install
 
 # Test
-CI=true yarn test
+CI=true npm run test
 
-unset YARN_IGNORE_PATH
 cleanup

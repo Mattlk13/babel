@@ -42,6 +42,14 @@ describe("cloneNode", function () {
     expect(t.isNodesEquivalent(node, cloned)).toBe(true);
   });
 
+  it("should handle deep cloning without loc of fragments", function () {
+    const program = "foo();";
+    const node = parse(program);
+    const cloned = t.cloneNode(node, /* deep */ true, /* withoutLoc */ true);
+    expect(node).not.toBe(cloned);
+    expect(t.isNodesEquivalent(node, cloned)).toBe(true);
+  });
+
   it("should handle missing array element", function () {
     const node = parse("[,0]");
     const cloned = t.cloneNode(node);
@@ -112,6 +120,9 @@ describe("cloneNode", function () {
     node.declarations[0].id.loc = {};
 
     const cloned = t.cloneNode(node, /* deep */ true, /* withoutLoc */ false);
+    expect(cloned.declarations[0].id.leadingComments[0]).not.toBe(
+      node.declarations[0].id.leadingComments[0],
+    );
     expect(cloned.declarations[0].id.leadingComments[0].loc).toBe(
       node.declarations[0].id.leadingComments[0].loc,
     );

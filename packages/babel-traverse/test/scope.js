@@ -2,7 +2,7 @@ import traverse, { NodePath } from "../lib";
 import { parse } from "@babel/parser";
 import * as t from "@babel/types";
 
-function getPath(code, options) {
+function getPath(code, options): NodePath<t.Program> {
   const ast =
     typeof code === "string" ? parse(code, options) : createNode(code);
   let path;
@@ -89,6 +89,168 @@ describe("scope", () => {
             .get("body.1.expression.params.0")
             .scope.getBinding("a").path.node.right.value,
         ).toBe("inside");
+      });
+    });
+
+    describe("import declaration", () => {
+      it.each([
+        [
+          "import default",
+          "import foo from 'foo';(foo)=>{}",
+          "foo",
+          "ImportDefaultSpecifier",
+        ],
+        [
+          "import named default",
+          "import { default as foo } from 'foo';(foo)=>{}",
+          "foo",
+          "ImportSpecifier",
+        ],
+        [
+          "import named",
+          "import { foo } from 'foo';(foo)=>{}",
+          "foo",
+          "ImportSpecifier",
+        ],
+        [
+          "import named aliased",
+          "import { _foo as foo } from 'foo';(foo)=>{}",
+          "foo",
+          "ImportSpecifier",
+        ],
+        [
+          "import namespace",
+          "import * as foo from 'foo';(foo)=>{}",
+          "foo",
+          "ImportNamespaceSpecifier",
+        ],
+      ])("%s", (testTitle, source, bindingName, bindingNodeType) => {
+        expect(
+          getPath(source, { sourceType: "module" }).scope.getBinding(
+            bindingName,
+          ).path.type,
+        ).toBe(bindingNodeType);
+      });
+    });
+
+    describe("export declaration", () => {
+      it.each([
+        [
+          "export default function",
+          "export default function foo(foo) {}",
+          "foo",
+          "FunctionDeclaration",
+        ],
+        [
+          "export default class",
+          "export default class foo extends function foo () {} {}",
+          "foo",
+          "ClassDeclaration",
+        ],
+        [
+          "export named default",
+          "export const foo = function foo(foo) {};",
+          "foo",
+          "VariableDeclarator",
+        ],
+        [
+          "export named default",
+          "export const [ { foo } ] = function foo(foo) {};",
+          "foo",
+          "VariableDeclarator",
+        ],
+      ])("%s", (testTitle, source, bindingName, bindingNodeType) => {
+        expect(
+          getPath(source, { sourceType: "module" }).scope.getBinding(
+            bindingName,
+          ).path.type,
+        ).toBe(bindingNodeType);
+      });
+    });
+
+    describe("computed method key", () => {
+      describe("should not have visibility of declarations inside method body", () => {
+        it("when path is computed key", () => {
+          expect(
+            getPath(`var a = "outside"; ({ [a]() { let a = "inside" } })`)
+              .get("body.1.expression.properties.0.key")
+              .scope.getBinding("a").path.node.init.value,
+          ).toBe("outside");
+
+          expect(
+            getPath(
+              `var a = "outside"; class foo { [a]() { let a = "inside" } }`,
+            )
+              .get("body.1.body.body.0.key")
+              .scope.getBinding("a").path.node.init.value,
+          ).toBe("outside");
+        });
+
+        it("when path is in nested scope which is computed key", () => {
+          expect(
+            getPath(`var a = "outside"; ({ [() => a]() { let a = "inside" } })`)
+              .get("body.1.expression.properties.0.key.body")
+              .scope.getBinding("a").path.node.init.value,
+          ).toBe("outside");
+
+          expect(
+            getPath(
+              `var a = "outside"; class foo { [() => a]() { let a = "inside" } }`,
+            )
+              .get("body.1.body.body.0.key.body")
+              .scope.getBinding("a").path.node.init.value,
+          ).toBe("outside");
+        });
+
+        it("when path is in nested scope within computed key", () => {
+          expect(
+            getPath(
+              `var a = "outside"; ({ [(() => a)() + ""]() { let a = "inside" } })`,
+            )
+              .get("body.1.expression.properties.0.key.left.callee.body")
+              .scope.getBinding("a").path.node.init.value,
+          ).toBe("outside");
+
+          expect(
+            getPath(
+              `var a = "outside"; class foo { [(() => a)() + ""]() { let a = "inside" } }`,
+            )
+              .get("body.1.body.body.0.key.left.callee.body")
+              .scope.getBinding("a").path.node.init.value,
+          ).toBe("outside");
+        });
+
+        it("when path is in nested within another computed key", () => {
+          expect(
+            getPath(
+              `var a = "outside"; ({ get [ { get [a]() { let a = "inside"; return a; } }.outside ]() { let a = "middle"; return a; } })`,
+            )
+              .get("body.1.expression.properties.0.key.object.properties.0.key")
+              .scope.getBinding("a").path.node.init.value,
+          ).toBe("outside");
+
+          expect(
+            getPath(
+              `var a = "outside"; class foo { static get [ class { static get [a]() { let a = "inside"; return a; } }.outside ]() { let a = "middle"; return a; } }`,
+            )
+              .get("body.1.body.body.0.key.object.body.body.0.key")
+              .scope.getBinding("a").path.node.init.value,
+          ).toBe("outside");
+        });
+      });
+
+      it("should not have visibility on parameter bindings", () => {
+        expect(
+          getPath(`var a = "outside"; ({ [a](a = "inside") {} })`)
+            .get("body.1.expression.properties.0.key")
+            .scope.getBinding("a").path.node.init.value,
+        ).toBe("outside");
+
+        expect(
+          getPath(`var a = "outside"; class foo { [a](a = "inside") {} }`)
+            .get("body.1.body.body.0.key")
+            .scope.getBinding("a").path.node.init.value,
+        ).toBe("outside");
       });
     });
 
@@ -232,19 +394,6 @@ describe("scope", () => {
       expect(
         getPath("String.raw`foo`").get("body")[0].get("expression").isPure(),
       ).toBeTruthy();
-      expect(getPath("this").get("body.0.expression").isPure()).toBeTruthy();
-      expect(getPath("this.foo").get("body.0.expression").isPure()).toBeFalsy();
-      expect(
-        getPath("({ m() { super.foo } })")
-          .get("body.0.expression.properties.0.body.body.0.expression")
-          .isPure(),
-      ).toBeFalsy();
-      expect(
-        // This only tests "super", not "super.foo"
-        getPath("({ m() { super.foo } })")
-          .get("body.0.expression.properties.0.body.body.0.expression.object")
-          .isPure(),
-      ).toBeTruthy();
     });
 
     test("label", function () {
@@ -294,6 +443,41 @@ describe("scope", () => {
       expect(referencePaths[1].node.loc.start).toEqual({
         line: 1,
         column: 32,
+      });
+    });
+
+    describe("after crawl", () => {
+      it("modified function identifier available in function scope", () => {
+        const path = getPath("(function f(f) {})")
+          .get("body")[0]
+          .get("expression");
+        path.get("id").replaceWith(t.identifier("g"));
+        path.scope.crawl();
+        const binding = path.scope.getBinding("g");
+        expect(binding.kind).toBe("local");
+      });
+      it("modified function param available in function scope", () => {
+        const path = getPath("(function f(f) {})")
+          .get("body")[0]
+          .get("expression");
+        path.get("params")[0].replaceWith(t.identifier("g"));
+        path.scope.crawl();
+        const binding = path.scope.getBinding("g");
+        expect(binding.kind).toBe("param");
+      });
+      it("modified class identifier available in class expression scope", () => {
+        const path = getPath("(class c {})").get("body")[0].get("expression");
+        path.get("id").replaceWith(t.identifier("g"));
+        path.scope.crawl();
+        const binding = path.scope.getBinding("g");
+        expect(binding.kind).toBe("local");
+      });
+      it("modified class identifier available in class declaration scope", () => {
+        const path = getPath("class c {}").get("body")[0];
+        path.get("id").replaceWith(t.identifier("g"));
+        path.scope.crawl();
+        const binding = path.scope.getBinding("g");
+        expect(binding.kind).toBe("let");
       });
     });
 
@@ -364,6 +548,13 @@ describe("scope", () => {
 
       expect(path.scope.generateUid("Cls")).toBe("_Cls2");
     });
+
+    it("re-exports are not references", () => {
+      const path = getPath("export { x } from 'y'", {
+        sourceType: "module",
+      });
+      expect(path.scope.hasGlobal("x")).toBe(false);
+    });
   });
 
   describe("duplicate bindings", () => {
@@ -387,12 +578,16 @@ describe("scope", () => {
           ),
         );
       };
-      ["let", "const"].forEach(name => {
-        it(name, () => {
-          const ast = createTryCatch(name);
+      it("let", () => {
+        const ast = createTryCatch("let");
 
-          expect(() => getPath(ast)).toThrowErrorMatchingSnapshot();
-        });
+        expect(() => getPath(ast)).toThrowErrorMatchingSnapshot();
+      });
+
+      it("const", () => {
+        const ast = createTryCatch("const");
+
+        expect(() => getPath(ast)).toThrowErrorMatchingSnapshot();
       });
 
       it("var", () => {
@@ -427,7 +622,6 @@ describe("scope", () => {
       // unless node1 === node2
       const cases = [
         ["const", "let", false],
-
         ["const", "const", false],
         ["const", "function", false],
         ["const", "class", false],
@@ -438,11 +632,14 @@ describe("scope", () => {
         ["let", "function", false],
         ["let", "var", false],
 
-        //["var", "class", true],
+        ["var", "class", false],
         ["var", "function", true],
         ["var", "var", true],
 
         ["class", "function", false],
+        ["class", "class", false],
+
+        ["function", "function", true],
       ];
 
       const createNode = function (kind) {
@@ -473,30 +670,34 @@ describe("scope", () => {
       };
 
       for (const [kind1, kind2, success] of cases) {
-        it(`${kind1}/${kind2}`, () => {
-          const ast = createAST(kind1, kind2);
-
-          if (success) {
+        if (success) {
+          it(`${kind1}/${kind2} should succeed`, () => {
+            const ast = createAST(kind1, kind2);
             expect(() => getPath(ast)).not.toThrow();
-          } else {
+          });
+        } else {
+          it(`${kind1}/${kind2} should fail`, () => {
+            const ast = createAST(kind1, kind2);
             expect(() => getPath(ast)).toThrowErrorMatchingSnapshot();
-          }
-        });
+          });
+        }
 
         if (kind1 !== kind2) {
           // todo: remove the if allowed
           if (kind1 === "const" && (kind2 === "function" || kind2 === "var")) {
             continue;
           }
-          it(`${kind2}/${kind1}`, () => {
-            const ast = createAST(kind2, kind1);
-
-            if (success) {
+          if (success) {
+            it(`${kind2}/${kind1} should succeed`, () => {
+              const ast = createAST(kind2, kind1);
               expect(() => getPath(ast)).not.toThrow();
-            } else {
+            });
+          } else {
+            it(`${kind2}/${kind1} should fail`, () => {
+              const ast = createAST(kind2, kind1);
               expect(() => getPath(ast)).toThrowErrorMatchingSnapshot();
-            }
-          });
+            });
+          }
         }
       }
     });

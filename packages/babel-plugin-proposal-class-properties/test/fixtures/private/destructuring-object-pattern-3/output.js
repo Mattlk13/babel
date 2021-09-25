@@ -1,15 +1,13 @@
-var _client = new WeakMap();
+var _client = /*#__PURE__*/new WeakMap();
 
 var Foo = function Foo(props) {
   "use strict";
 
   babelHelpers.classCallCheck(this, Foo);
-
-  _client.set(this, {
+  babelHelpers.classPrivateFieldInitSpec(this, _client, {
     writable: true,
     value: void 0
   });
-
   ({
     x: babelHelpers.classPrivateFieldDestructureSet(this, _client).value = 5
   } = props);

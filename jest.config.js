@@ -1,11 +1,10 @@
+const supportsESM = parseInt(process.versions.node) >= 12;
+
 module.exports = {
   collectCoverageFrom: [
-    "packages/*/src/**/*.mjs",
-    "packages/*/src/**/*.js",
-    "codemods/*/src/**/*.mjs",
-    "codemods/*/src/**/*.js",
-    "eslint/*/src/**/*.mjs",
-    "eslint/*/src/**/*.js",
+    "packages/*/src/**/*.{js,mjs,ts}",
+    "codemods/*/src/**/*.{js,mjs,ts}",
+    "eslint/*/src/**/*.{js,mjs,ts}",
   ],
   // The eslint/* packages use ESLint v6, which has dropped support for Node v6.
   // TODO: Remove this process.version check in Babel 8.
@@ -22,6 +21,7 @@ module.exports = {
     "/test/helpers/",
     "<rootDir>/test/warning\\.js",
     "<rootDir>/build/",
+    "<rootDir>/.history/", // local directory for VSCode Extension - https://marketplace.visualstudio.com/items?itemName=xyz.local-history
     "_browser\\.js",
   ],
   testEnvironment: "node",
@@ -43,6 +43,7 @@ module.exports = {
     "/test/__data__/",
     "<rootDir>/build/",
   ],
+  resolver: supportsESM ? "./test/jestExportsMapResolver.cjs" : null,
   // We don't need module name mappers here as depedencies of workspace
   // package should be declared explicitly in the package.json
   // Yarn will generate correct file links so that Jest can resolve correctly

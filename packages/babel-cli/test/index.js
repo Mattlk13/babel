@@ -1,16 +1,21 @@
-const readdir = require("fs-readdir-recursive");
-const helper = require("@babel/helper-fixtures");
-const rimraf = require("rimraf");
-const { sync: makeDirSync } = require("make-dir");
-const child = require("child_process");
-const escapeRegExp = require("lodash/escapeRegExp");
-const merge = require("lodash/merge");
-const path = require("path");
-const fs = require("fs");
+import readdir from "fs-readdir-recursive";
+import * as helper from "@babel/helper-fixtures";
+import rimraf from "rimraf";
+import { sync as makeDirSync } from "make-dir";
+import child from "child_process";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+import { createRequire } from "module";
 
-const fixtureLoc = path.join(__dirname, "fixtures");
-const tmpLoc = path.join(__dirname, "tmp");
-const rootDir = path.resolve(__dirname, "../../..");
+import { chmod } from "../lib/babel/util";
+
+const require = createRequire(import.meta.url);
+
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const fixtureLoc = path.join(dirname, "fixtures");
+const tmpLoc = path.join(dirname, "tmp");
+const rootDir = path.resolve(dirname, "../../..");
 
 const fileFilter = function (x) {
   return x !== ".DS_Store";
@@ -50,6 +55,10 @@ const saveInFiles = function (files) {
     outputFileSync(filename, content);
   });
 };
+
+function escapeRegExp(string) {
+  return string.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
+}
 
 const normalizeOutput = function (str, cwd) {
   let result = str
@@ -130,7 +139,7 @@ const assertTest = function (stdout, stderr, opts, cwd) {
 };
 
 const buildTest = function (binName, testName, opts) {
-  const binLoc = path.join(__dirname, "../lib", binName);
+  const binLoc = path.join(dirname, "../lib", binName);
 
   return function (callback) {
     saveInFiles(opts.inFiles);
@@ -211,7 +220,7 @@ fs.readdirSync(fixtureLoc).forEach(function (binName) {
 
       const testLoc = path.join(suiteLoc, testName);
 
-      const opts = {
+      let opts = {
         args: [],
       };
 
@@ -237,7 +246,7 @@ fs.readdirSync(fixtureLoc).forEach(function (binName) {
 
           delete taskOpts.os;
         }
-        merge(opts, taskOpts);
+        opts = { args: [], ...taskOpts };
       }
 
       ["stdout", "stdin", "stderr"].forEach(function (key) {
@@ -264,8 +273,30 @@ fs.readdirSync(fixtureLoc).forEach(function (binName) {
         // copy .babelignore file to tmp directory
         opts.inFiles[".babelignore"] = helper.readFile(babelIgnoreLoc);
       }
-
+      // eslint-disable-next-line jest/valid-title
       it(testName, buildTest(binName, testName, opts), 20000);
+    });
+  });
+});
+
+describe("util.js", () => {
+  describe("chmod", () => {
+    it("should warn the user if chmod fails", () => {
+      const spyConsoleWarn = jest
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
+
+      // The first argument should be a string.
+      // The real reason chmod will fail is due to wrong permissions,
+      // but this is enough to cause a failure.
+      chmod(100, "file.js");
+
+      expect(spyConsoleWarn).toHaveBeenCalledTimes(1);
+      expect(spyConsoleWarn).toHaveBeenCalledWith(
+        "Cannot change permissions of file.js",
+      );
+
+      spyConsoleWarn.mockRestore();
     });
   });
 });

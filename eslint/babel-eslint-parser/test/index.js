@@ -1,11 +1,15 @@
 import path from "path";
-import { pathToFileURL } from "url";
 import escope from "eslint-scope";
 import unpad from "dedent";
-import { parseForESLint } from "../src";
+import { fileURLToPath } from "url";
+import { createRequire } from "module";
+import { parseForESLint } from "../lib/index.cjs";
+
+const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const BABEL_OPTIONS = {
-  configFile: require.resolve(
+  configFile: path.resolve(
+    dirname,
     "../../babel-eslint-shared-fixtures/config/babel.config.js",
   ),
 };
@@ -73,18 +77,20 @@ describe("Babel and Espree", () => {
     expect(babelAST).toEqual(espreeAST);
   }
 
-  beforeAll(async () => {
+  beforeAll(() => {
+    const require = createRequire(import.meta.url);
+
     // Use the version of Espree that is a dependency of
     // the version of ESLint we are testing against.
     const espreePath = require.resolve("espree", {
       paths: [path.dirname(require.resolve("eslint"))],
     });
 
-    espree = await import(pathToFileURL(espreePath));
+    espree = require(espreePath);
   });
 
   describe("compatibility", () => {
-    it("should allow ast.analyze to be called without options", function () {
+    it("should allow ast.analyze to be called without options", () => {
       const ast = parseForESLint("`test`", {
         eslintScopeManager: true,
         eslintVisitorKeys: true,
@@ -93,6 +99,16 @@ describe("Babel and Espree", () => {
       expect(() => {
         escope.analyze(ast);
       }).not.toThrow(new TypeError("Should allow no options argument."));
+    });
+
+    it("should not crash when `loadPartialConfigSync` returns `null`", () => {
+      const thunk = () =>
+        parseForESLint("`test`", {
+          eslintScopeManager: true,
+          eslintVisitorKeys: true,
+          babelOptions: { filename: "test.js", ignore: [/./] },
+        });
+      expect(thunk).not.toThrow();
     });
   });
 
@@ -316,16 +332,122 @@ describe("Babel and Espree", () => {
     expect(babylonAST.tokens[1].type).toEqual("Punctuator");
   });
 
-  // Espree doesn't support private fields yet
-  it("hash (token)", () => {
-    const code = "class A { #x }";
+  it("brace and bracket hash operator (token)", () => {
+    const code = "#[]; #{}";
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: {
+        filename: "test.js",
+        parserOpts: {
+          plugins: [["recordAndTuple", { syntaxType: "hash" }]],
+          tokens: true,
+        },
+      },
+    }).ast;
+    expect(babylonAST.tokens[0]).toEqual(
+      expect.objectContaining({ type: "Punctuator", value: "#[" }),
+    );
+    expect(babylonAST.tokens[3]).toEqual(
+      expect.objectContaining({ type: "Punctuator", value: "#{" }),
+    );
+  });
+
+  it("brace and bracket bar operator (token)", () => {
+    const code = "{||}; [||]";
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: {
+        filename: "test.js",
+        parserOpts: {
+          plugins: [["recordAndTuple", { syntaxType: "bar" }]],
+          tokens: true,
+        },
+      },
+    }).ast;
+    expect(babylonAST.tokens[0]).toEqual(
+      expect.objectContaining({ type: "Punctuator", value: "{|" }),
+    );
+    expect(babylonAST.tokens[1]).toEqual(
+      expect.objectContaining({ type: "Punctuator", value: "|}" }),
+    );
+    expect(babylonAST.tokens[3]).toEqual(
+      expect.objectContaining({ type: "Punctuator", value: "[|" }),
+    );
+    expect(babylonAST.tokens[4]).toEqual(
+      expect.objectContaining({ type: "Punctuator", value: "|]" }),
+    );
+  });
+
+  if (process.env.BABEL_8_BREAKING) {
+    it("hash (token)", () => {
+      const code = "class A { #x }";
+      const babylonAST = parseForESLint(code, {
+        eslintVisitorKeys: true,
+        eslintScopeManager: true,
+        babelOptions: BABEL_OPTIONS,
+      }).ast;
+      expect(babylonAST.tokens[3].type).toEqual("PrivateIdentifier");
+      expect(babylonAST.tokens[3].value).toEqual("x");
+    });
+  } else {
+    // Espree doesn't support private fields yet
+    it("hash (token)", () => {
+      const code = "class A { #x }";
+      const babylonAST = parseForESLint(code, {
+        eslintVisitorKeys: true,
+        eslintScopeManager: true,
+        babelOptions: BABEL_OPTIONS,
+      }).ast;
+      expect(babylonAST.tokens[3].type).toEqual("Punctuator");
+      expect(babylonAST.tokens[3].value).toEqual("#");
+    });
+  }
+
+  it("static (token)", () => {
+    const code = `
+      import { static as foo } from "foo";
+
+      class A {
+        static m() {}
+        static() {}
+      }
+    `;
+
+    parseAndAssertSame(code);
+
     const babylonAST = parseForESLint(code, {
       eslintVisitorKeys: true,
       eslintScopeManager: true,
       babelOptions: BABEL_OPTIONS,
     }).ast;
-    expect(babylonAST.tokens[3].type).toEqual("Punctuator");
-    expect(babylonAST.tokens[3].value).toEqual("#");
+
+    const staticKw = { type: "Keyword", value: "static" };
+
+    expect(babylonAST.tokens[2]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[12]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[18]).toMatchObject(staticKw);
+  });
+
+  it("parse to PropertyDeclaration when `classFeatures: true`", () => {
+    const code = "class A { #x }";
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: {
+        filename: "test.js",
+        parserOpts: {
+          plugins: [
+            ["estree", { classFeatures: true }],
+            "classPrivateProperties",
+            "classProperties",
+          ],
+        },
+      },
+    }).ast;
+    const classDeclaration = babylonAST.body[0];
+    expect(classDeclaration.body.body[0].type).toEqual("PropertyDefinition");
   });
 
   it("empty program with line comment", () => {

@@ -1,7 +1,14 @@
 import type { NodePath } from "@babel/traverse";
 import nameFunction from "@babel/helper-function-name";
 import template from "@babel/template";
-import * as t from "@babel/types";
+import {
+  blockStatement,
+  callExpression,
+  functionExpression,
+  isAssignmentPattern,
+  isRestElement,
+  returnStatement,
+} from "@babel/types";
 
 const buildAnonymousExpressionWrapper = template.expression(`
   (function () {
@@ -34,16 +41,14 @@ function classOrObjectMethod(path: NodePath, callId: Object) {
   const node = path.node;
   const body = node.body;
 
-  const container = t.functionExpression(
+  const container = functionExpression(
     null,
     [],
-    t.blockStatement(body.body),
+    blockStatement(body.body),
     true,
   );
   body.body = [
-    t.returnStatement(
-      t.callExpression(t.callExpression(callId, [container]), []),
-    ),
+    returnStatement(callExpression(callExpression(callId, [container]), [])),
   ];
 
   // Regardless of whether or not the wrapped function is a an async method
@@ -57,7 +62,7 @@ function classOrObjectMethod(path: NodePath, callId: Object) {
     .unwrapFunctionEnvironment();
 }
 
-function plainFunction(path: NodePath, callId: Object) {
+function plainFunction(path: NodePath, callId: Object, noNewArrows: boolean) {
   const node = path.node;
   const isDeclaration = path.isFunctionDeclaration();
   const functionId = node.id;
@@ -68,7 +73,7 @@ function plainFunction(path: NodePath, callId: Object) {
     : buildAnonymousExpressionWrapper;
 
   if (path.isArrowFunctionExpression()) {
-    path.arrowFunctionToExpression();
+    path.arrowFunctionToExpression({ noNewArrows });
   }
 
   node.id = null;
@@ -77,7 +82,7 @@ function plainFunction(path: NodePath, callId: Object) {
     node.type = "FunctionExpression";
   }
 
-  const built = t.callExpression(callId, [node]);
+  const built = callExpression(callId, [node]);
   const container = wrapper({
     NAME: functionId || null,
     REF: path.scope.generateUidIdentifier(functionId ? functionId.name : "ref"),
@@ -85,7 +90,7 @@ function plainFunction(path: NodePath, callId: Object) {
     PARAMS: node.params.reduce(
       (acc, param) => {
         acc.done =
-          acc.done || t.isAssignmentPattern(param) || t.isRestElement(param);
+          acc.done || isAssignmentPattern(param) || isRestElement(param);
 
         if (!acc.done) {
           acc.params.push(path.scope.generateUidIdentifier("x"));
@@ -123,10 +128,15 @@ function plainFunction(path: NodePath, callId: Object) {
   }
 }
 
-export default function wrapFunction(path: NodePath, callId: Object) {
+export default function wrapFunction(
+  path: NodePath,
+  callId: Object,
+  // TODO(Babel 8): Consider defaulting to false for spec compliancy
+  noNewArrows: boolean = true,
+) {
   if (path.isMethod()) {
     classOrObjectMethod(path, callId);
   } else {
-    plainFunction(path, callId);
+    plainFunction(path, callId, noNewArrows);
   }
 }

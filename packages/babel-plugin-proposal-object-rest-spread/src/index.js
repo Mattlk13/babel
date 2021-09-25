@@ -2,6 +2,9 @@ import { declare } from "@babel/helper-plugin-utils";
 import syntaxObjectRestSpread from "@babel/plugin-syntax-object-rest-spread";
 import { types as t } from "@babel/core";
 import { convertFunctionParams } from "@babel/plugin-transform-parameters";
+import { isRequired } from "@babel/helper-compilation-targets";
+import compatData from "@babel/compat-data/corejs2-built-ins";
+import shouldStoreRHSInTemporaryVariable from "./shouldStoreRHSInTemporaryVariable";
 
 // TODO: Remove in Babel 8
 // @babel/types <=7.3.3 counts FOO as referenced in var { x: FOO }.
@@ -17,11 +20,21 @@ const ZERO_REFS = (() => {
 export default declare((api, opts) => {
   api.assertVersion(7);
 
-  const { useBuiltIns = false, loose = false } = opts;
+  const targets = api.targets();
+  const supportsObjectAssign = !isRequired("es6.object.assign", targets, {
+    compatData,
+  });
+
+  const { useBuiltIns = supportsObjectAssign, loose = false } = opts;
 
   if (typeof loose !== "boolean") {
     throw new Error(".loose must be a boolean, or undefined");
   }
+
+  const ignoreFunctionLength = api.assumption("ignoreFunctionLength") ?? loose;
+  const objectRestNoSymbols = api.assumption("objectRestNoSymbols") ?? loose;
+  const pureGetters = api.assumption("pureGetters") ?? loose;
+  const setSpreadProperties = api.assumption("setSpreadProperties") ?? loose;
 
   function getExtendsHelper(file) {
     return useBuiltIns
@@ -83,6 +96,7 @@ export default declare((api, opts) => {
     const props = path.node.properties;
     const keys = [];
     let allLiteral = true;
+    let hasTemplateLiteral = false;
 
     for (const prop of props) {
       if (t.isIdentifier(prop.key) && !prop.computed) {
@@ -90,6 +104,7 @@ export default declare((api, opts) => {
         keys.push(t.stringLiteral(prop.key.name));
       } else if (t.isTemplateLiteral(prop.key)) {
         keys.push(t.cloneNode(prop.key));
+        hasTemplateLiteral = true;
       } else if (t.isLiteral(prop.key)) {
         keys.push(t.stringLiteral(String(prop.key.value)));
       } else {
@@ -98,7 +113,7 @@ export default declare((api, opts) => {
       }
     }
 
-    return { keys, allLiteral };
+    return { keys, allLiteral, hasTemplateLiteral };
   }
 
   // replaces impure computed keys with new identifiers
@@ -133,7 +148,7 @@ export default declare((api, opts) => {
   }
 
   //expects path to an object pattern
-  function createObjectSpread(path, file, objRef) {
+  function createObjectRest(path, file, objRef) {
     const props = path.get("properties");
     const last = props[props.length - 1];
     t.assertRestElement(last.node);
@@ -144,7 +159,8 @@ export default declare((api, opts) => {
       path.get("properties"),
       path.scope,
     );
-    const { keys, allLiteral } = extractNormalizedKeys(path);
+    const { keys, allLiteral, hasTemplateLiteral } =
+      extractNormalizedKeys(path);
 
     if (keys.length === 0) {
       return [
@@ -166,13 +182,29 @@ export default declare((api, opts) => {
       );
     } else {
       keyExpression = t.arrayExpression(keys);
+
+      if (!hasTemplateLiteral && !t.isProgram(path.scope.block)) {
+        // Hoist definition of excluded keys, so that it's not created each time.
+        const program = path.findParent(path => path.isProgram());
+        const id = path.scope.generateUidIdentifier("excluded");
+
+        program.scope.push({
+          id,
+          init: keyExpression,
+          kind: "const",
+        });
+
+        keyExpression = t.cloneNode(id);
+      }
     }
 
     return [
       impureComputedPropertyDeclarators,
       restElement.argument,
       t.callExpression(
-        file.addHelper(`objectWithoutProperties${loose ? "Loose" : ""}`),
+        file.addHelper(
+          `objectWithoutProperties${objectRestNoSymbols ? "Loose" : ""}`,
+        ),
         [t.cloneNode(objRef), keyExpression],
       ),
     ];
@@ -211,7 +243,7 @@ export default declare((api, opts) => {
 
   return {
     name: "proposal-object-rest-spread",
-    inherits: syntaxObjectRestSpread,
+    inherits: syntaxObjectRestSpread.default,
 
     visitor: {
       // function a({ b, ...c }) {}
@@ -275,7 +307,7 @@ export default declare((api, opts) => {
             idx >= i - 1 || paramsWithRestElement.has(idx);
           convertFunctionParams(
             path,
-            loose,
+            ignoreFunctionLength,
             shouldTransformParam,
             replaceRestElement,
           );
@@ -304,7 +336,7 @@ export default declare((api, opts) => {
             // skip single-property case, e.g.
             // const { ...x } = foo();
             // since the RHS will not be duplicated
-            originalPath.node.id.properties.length > 1 &&
+            shouldStoreRHSInTemporaryVariable(originalPath.node.id) &&
             !t.isIdentifier(originalPath.node.init)
           ) {
             // const { a, ...b } = foo();
@@ -357,13 +389,10 @@ export default declare((api, opts) => {
             path.isObjectPattern(),
           );
 
-          const [
-            impureComputedPropertyDeclarators,
-            argument,
-            callExpression,
-          ] = createObjectSpread(objectPatternPath, file, ref);
+          const [impureComputedPropertyDeclarators, argument, callExpression] =
+            createObjectRest(objectPatternPath, file, ref);
 
-          if (loose) {
+          if (pureGetters) {
             removeUnusedExcludedKeys(objectPatternPath);
           }
 
@@ -440,11 +469,8 @@ export default declare((api, opts) => {
             ]),
           );
 
-          const [
-            impureComputedPropertyDeclarators,
-            argument,
-            callExpression,
-          ] = createObjectSpread(leftPath, file, t.identifier(refName));
+          const [impureComputedPropertyDeclarators, argument, callExpression] =
+            createObjectRest(leftPath, file, t.identifier(refName));
 
           if (impureComputedPropertyDeclarators.length > 0) {
             nodes.push(
@@ -553,7 +579,7 @@ export default declare((api, opts) => {
         if (!hasSpread(path.node)) return;
 
         let helper;
-        if (loose) {
+        if (setSpreadProperties) {
           helper = getExtendsHelper(file);
         } else {
           try {
@@ -583,10 +609,9 @@ export default declare((api, opts) => {
             return;
           }
 
-          // In loose mode, we don't want to make multiple calls. We're assuming
-          // that the spread objects either don't use getters, or that the
-          // getters are pure and don't depend on the order of evaluation.
-          if (loose) {
+          // When we can assume that getters are pure and don't depend on
+          // the order of evaluation, we can avoid making multiple calls.
+          if (pureGetters) {
             if (hadProps) {
               exp.arguments.push(obj);
             }

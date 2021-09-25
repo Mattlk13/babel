@@ -2,10 +2,12 @@
 
 import type { Options } from "../options";
 import * as N from "../types";
+import type { CommentWhitespace } from "../parser/comments";
 import { Position } from "../util/location";
 
 import { types as ct, type TokContext } from "./context";
-import { types as tt, type TokenType } from "./types";
+import { tt, type TokenType } from "./types";
+import type { ParsingError, ErrorTemplate } from "../parser/error";
 
 type TopicContextState = {
   // When a topic binding has been currently established,
@@ -31,13 +33,17 @@ export default class State {
 
   init(options: Options): void {
     this.strict =
-      options.strictMode === false ? false : options.sourceType === "module";
+      options.strictMode === false
+        ? false
+        : options.strictMode === true
+        ? true
+        : options.sourceType === "module";
 
     this.curLine = options.startLine;
     this.startLoc = this.endLoc = this.curPosition();
   }
 
-  errors: SyntaxError[] = [];
+  errors: ParsingError[] = [];
 
   // Used to signify the start of a potential arrow function
   potentialArrowAt: number = -1;
@@ -58,21 +64,20 @@ export default class State {
 
   // Flags to track
   maybeInArrowParameters: boolean = false;
-  inPipeline: boolean = false;
   inType: boolean = false;
   noAnonFunctionType: boolean = false;
   inPropertyName: boolean = false;
   hasFlowComment: boolean = false;
-  isIterator: boolean = false;
-  isDeclareContext: boolean = false;
+  isAmbientContext: boolean = false;
+  inAbstractClass: boolean = false;
 
-  // For the smartPipelines plugin:
+  // For the Hack-style pipelines plugin
   topicContext: TopicContextState = {
     maxNumOfResolvableTopics: 0,
     maxTopicIndex: null,
   };
 
-  // For the F# plugin
+  // For the F#-style pipelines plugin
   soloAwait: boolean = false;
   inFSharpPipelineDirectBody: boolean = false;
 
@@ -88,20 +93,11 @@ export default class State {
   // where @foo belongs to the outer class and @bar to the inner
   decoratorStack: Array<Array<N.Decorator>> = [[]];
 
-  // Comment store.
+  // Comment store for Program.comments
   comments: Array<N.Comment> = [];
 
   // Comment attachment store
-  trailingComments: Array<N.Comment> = [];
-  leadingComments: Array<N.Comment> = [];
-  commentStack: Array<{
-    start: number,
-    leadingComments: ?Array<N.Comment>,
-    trailingComments: ?Array<N.Comment>,
-    type: string,
-  }> = [];
-  // $FlowIgnore this is initialized when the parser starts.
-  commentPreviousNode: N.Node = null;
+  commentStack: Array<CommentWhitespace> = [];
 
   // The current position of the tokenizer in the input.
   pos: number = 0;
@@ -126,10 +122,10 @@ export default class State {
   lastTokStart: number = 0;
   lastTokEnd: number = 0;
 
-  // The context stack is used to superficially track syntactic
-  // context to predict whether a regular expression is allowed in a
-  // given position.
-  context: Array<TokContext> = [ct.braceStatement];
+  // The context stack is used to track whether the apostrophe "`" starts
+  // or ends a string template
+  context: Array<TokContext> = [ct.brace];
+  // Used to track whether a JSX element is allowed to form
   exprAllowed: boolean = true;
 
   // Used to signal to callers of `readWord1` whether the word
@@ -137,14 +133,15 @@ export default class State {
   // escape sequences must not be interpreted as keywords.
   containsEsc: boolean = false;
 
-  // This property is used to throw an error for
-  // an octal literal in a directive that occurs prior
-  // to a "use strict" directive.
-  octalPositions: number[] = [];
+  // This property is used to track the following errors
+  // - StrictNumericEscape
+  // - StrictOctalLiteral
+  //
+  // in a literal that occurs prior to/immediately after a "use strict" directive.
 
-  // Names of exports store. `default` is stored as a name for both
-  // `export default foo;` and `export { foo as default };`.
-  exportedIdentifiers: Array<string> = [];
+  // todo(JLHwung): set strictErrors to null and avoid recording string errors
+  // after a non-directive is parsed
+  strictErrors: Map<number, ErrorTemplate> = new Map();
 
   // Tokens length in token store
   tokensLength: number = 0;
@@ -172,3 +169,13 @@ export default class State {
     return state;
   }
 }
+
+export type LookaheadState = {
+  pos: number,
+  value: any,
+  type: TokenType,
+  start: number,
+  end: number,
+  /* Used only in readToken_mult_modulo */
+  inType: boolean,
+};

@@ -1,6 +1,5 @@
 import { declare } from "@babel/helper-plugin-utils";
 import syntaxDynamicImport from "@babel/plugin-syntax-dynamic-import";
-import { version } from "../package.json";
 
 const SUPPORTED_MODULES = ["commonjs", "amd", "systemjs"];
 
@@ -22,10 +21,13 @@ export default declare(api => {
 
   return {
     name: "proposal-dynamic-import",
-    inherits: syntaxDynamicImport,
+    inherits: syntaxDynamicImport.default,
 
     pre() {
-      this.file.set("@babel/plugin-proposal-dynamic-import", version);
+      this.file.set(
+        "@babel/plugin-proposal-dynamic-import",
+        PACKAGE_JSON.version,
+      );
     },
 
     visitor: {

@@ -1,17 +1,22 @@
-const path = require("path");
-const TestStream = require("test262-stream");
-const TestRunner = require("../utils/parser-test-runner");
+import path from "path";
+import { fileURLToPath } from "url";
+import TestStream from "test262-stream";
+import TestRunner from "../utils/parser-test-runner.js";
+
+const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const ignoredFeatures = [
   "__getter__",
   "__setter__",
   "AggregateError",
+  "Array.prototype.at",
   "Array.prototype.flat",
   "Array.prototype.flatMap",
   "Array.prototype.item",
   "Array.prototype.values",
   "ArrayBuffer",
   "align-detached-buffer-semantics-with-web-reality",
+  "arbitrary-module-namespace-names",
   "async-functions",
   "async-iteration",
   "arrow-function",
@@ -20,6 +25,12 @@ const ignoredFeatures = [
   "BigInt",
   "caller",
   "class",
+  "class-fields-private",
+  "class-fields-public",
+  "class-methods-private",
+  "class-static-fields-private",
+  "class-static-fields-public",
+  "class-static-methods-private",
   "cleanupSome",
   "coalesce-expression",
   "computed-property-names",
@@ -65,6 +76,7 @@ const ignoredFeatures = [
   "Intl.Segmenter",
   "IsHTMLDDA",
   "import.meta",
+  "intl-normative-optional",
   "json-superset",
   "legacy-regexp",
   "let",
@@ -96,6 +108,7 @@ const ignoredFeatures = [
   "SharedArrayBuffer",
   "Set",
   "String.fromCodePoint",
+  "String.prototype.at",
   "String.prototype.endsWith",
   "String.prototype.includes",
   "String.prototype.item",
@@ -122,7 +135,9 @@ const ignoredFeatures = [
   "Symbol.unscopables",
   "tail-call-optimization",
   "template",
+  "top-level-await",
   "TypedArray",
+  "TypedArray.prototype.at",
   "TypedArray.prototype.item",
   "u180e",
   "Uint8Array",
@@ -138,14 +153,8 @@ const ignoredFeatures = [
 const ignoredTests = ["built-ins/RegExp/", "language/literals/regexp/"];
 
 const featuresToPlugins = {
-  "arbitrary-module-namespace-names": "moduleStringNames",
-  "class-fields-private": "classPrivateProperties",
-  "class-fields-public": "classProperties",
-  "class-methods-private": "classPrivateMethods",
-  "class-static-fields-public": "classProperties",
-  "class-static-fields-private": "classPrivateProperties",
-  "class-static-methods-private": "classPrivateMethods",
-  "top-level-await": "topLevelAwait",
+  "class-static-block": "classStaticBlock",
+  "import-assertions": "importAssertions",
 };
 
 const unmappedFeatures = new Set();
@@ -163,8 +172,8 @@ function* getPlugins(features) {
 }
 
 const runner = new TestRunner({
-  testDir: path.join(__dirname, "../../../build/test262"),
-  allowlist: path.join(__dirname, "allowlist.txt"),
+  testDir: path.join(dirname, "../../../build/test262"),
+  allowlist: path.join(dirname, "allowlist.txt"),
   logInterval: 500,
   shouldUpdate: process.argv.includes("--update-allowlist"),
 

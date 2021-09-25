@@ -4,8 +4,10 @@ import { template, types as t } from "@babel/core";
 export default declare((api, options) => {
   api.assertVersion(7);
 
-  const { loose } = options;
-  const pushComputedProps = loose
+  const setComputedProperties =
+    api.assumption("setComputedProperties") ?? options.loose;
+
+  const pushComputedProps = setComputedProperties
     ? pushComputedPropsLoose
     : pushComputedPropsSpec;
 
@@ -90,8 +92,6 @@ export default declare((api, options) => {
 
       if (prop.kind === "get" || prop.kind === "set") {
         pushMutatorDefine(info, prop);
-      } else if (t.isStringLiteral(key, { value: "__proto__" })) {
-        pushAssign(objId, prop, body);
       } else {
         if (computedProps.length === 1) {
           return t.callExpression(state.addHelper("defineProperty"), [

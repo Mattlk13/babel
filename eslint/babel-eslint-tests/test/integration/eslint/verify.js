@@ -1,4 +1,6 @@
 import verifyAndAssertMessages from "../../helpers/verifyAndAssertMessages";
+import path from "path";
+import { fileURLToPath } from "url";
 
 describe("verify", () => {
   it("arrow function support (issue #1)", () => {
@@ -1080,7 +1082,8 @@ describe("verify", () => {
         parserOptions: {
           sourceType,
           babelOptions: {
-            configFile: require.resolve(
+            configFile: path.resolve(
+              path.dirname(fileURLToPath(import.meta.url)),
               "../../../../babel-eslint-shared-fixtures/config/babel.config.decorators-legacy.js",
             ),
           },
@@ -1734,6 +1737,15 @@ describe("verify", () => {
           { "no-unused-vars": 1 },
         );
       });
+
+      it("type annotations should work", () => {
+        verifyAndAssertMessages(
+          `class C {
+            #p: Array<number>
+          }`,
+          { "no-undef": 1 },
+        );
+      });
     });
 
     describe("private methods", () => {
@@ -1792,6 +1804,31 @@ describe("verify", () => {
   #b() {} // no-unreachable should not bail here
 }`,
           { "no-unreachable": 1 },
+        );
+      });
+
+      it("should work with func-names", () => {
+        verifyAndAssertMessages(
+          `
+              export class C {
+                #d() {};
+              }
+          `,
+          { "func-names": 1 },
+        );
+      });
+
+      it("should work with space-before-function-paren", () => {
+        verifyAndAssertMessages(
+          `
+              export class C {
+                #d() {};
+              }
+          `,
+          { "space-before-function-paren": 1 },
+          [
+            "2:5 Missing space before function parentheses. space-before-function-paren",
+          ],
         );
       });
     });

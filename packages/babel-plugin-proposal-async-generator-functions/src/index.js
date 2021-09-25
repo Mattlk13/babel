@@ -47,7 +47,7 @@ export default declare(api => {
       }
 
       // push the rest of the original loop body onto our new body
-      block.body = block.body.concat(node.body.body);
+      block.body.push(...node.body.body);
 
       t.inherits(loop, node);
       t.inherits(loop.body, node.body);
@@ -70,6 +70,8 @@ export default declare(api => {
 
       path.traverse(yieldStarVisitor, state);
 
+      // We don't need to pass the noNewArrows assumption, since
+      // async generators are never arrow functions.
       remapAsyncToGenerator(path, {
         wrapAsync: state.addHelper("wrapAsyncGenerator"),
         wrapAwait: state.addHelper("awaitAsyncGenerator"),
@@ -79,7 +81,7 @@ export default declare(api => {
 
   return {
     name: "proposal-async-generator-functions",
-    inherits: syntaxAsyncGenerators,
+    inherits: syntaxAsyncGenerators.default,
 
     visitor: {
       Program(path, state) {

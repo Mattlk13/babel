@@ -5,14 +5,23 @@ import { types as t } from "@babel/core";
 export default declare((api, options) => {
   api.assertVersion(7);
 
-  const { loose, allowArrayLike } = options;
+  const iterableIsArray = api.assumption("iterableIsArray") ?? options.loose;
+  const arrayLikeIsIterable =
+    options.allowArrayLike ?? api.assumption("arrayLikeIsIterable");
 
   function getSpreadLiteral(spread, scope) {
-    if (loose && !t.isIdentifier(spread.argument, { name: "arguments" })) {
+    if (
+      iterableIsArray &&
+      !t.isIdentifier(spread.argument, { name: "arguments" })
+    ) {
       return spread.argument;
     } else {
-      return scope.toArray(spread.argument, true, allowArrayLike);
+      return scope.toArray(spread.argument, true, arrayLikeIsIterable);
     }
+  }
+
+  function hasHole(spread) {
+    return spread.elements.some(el => el === null);
   }
 
   function hasSpread(nodes) {
@@ -30,14 +39,27 @@ export default declare((api, options) => {
     return [];
   }
 
-  function build(props: Array, scope) {
+  function build(props: Array, scope, file) {
     const nodes = [];
     let _props = [];
 
     for (const prop of props) {
       if (t.isSpreadElement(prop)) {
         _props = push(_props, nodes);
-        nodes.push(getSpreadLiteral(prop, scope));
+        let spreadLiteral = getSpreadLiteral(prop, scope);
+
+        if (t.isArrayExpression(spreadLiteral) && hasHole(spreadLiteral)) {
+          spreadLiteral = t.callExpression(
+            file.addHelper(
+              process.env.BABEL_8_BREAKING
+                ? "arrayLikeToArray"
+                : "arrayWithoutHoles",
+            ),
+            [spreadLiteral],
+          );
+        }
+
+        nodes.push(spreadLiteral);
       } else {
         _props.push(prop);
       }
@@ -57,7 +79,7 @@ export default declare((api, options) => {
         const elements = node.elements;
         if (!hasSpread(elements)) return;
 
-        const nodes = build(elements, scope);
+        const nodes = build(elements, scope, this);
         let first = nodes[0];
 
         // If there is only one element in the ArrayExpression and
@@ -97,7 +119,13 @@ export default declare((api, options) => {
 
         const calleePath = skipTransparentExprWrappers(path.get("callee"));
 
-        if (calleePath.isSuper()) return;
+        if (calleePath.isSuper()) {
+          // NOTE: spread and classes have almost the same compat data, so this is very unlikely to happen in practice.
+          throw path.buildCodeFrameError(
+            "It's not possible to compile spread arguments in `super()` without compiling classes.\n" +
+              "Please add '@babel/plugin-transform-classes' to your Babel configuration.",
+          );
+        }
 
         let contextLiteral = scope.buildUndefinedNode();
 
@@ -107,7 +135,7 @@ export default declare((api, options) => {
         if (args.length === 1 && args[0].argument.name === "arguments") {
           nodes = [args[0].argument];
         } else {
-          nodes = build(args, scope);
+          nodes = build(args, scope, this);
         }
 
         const first = nodes.shift();
@@ -149,7 +177,7 @@ export default declare((api, options) => {
         let args = node.arguments;
         if (!hasSpread(args)) return;
 
-        const nodes = build(args, scope);
+        const nodes = build(args, scope, this);
 
         const first = nodes.shift();
 

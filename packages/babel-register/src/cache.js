@@ -1,7 +1,6 @@
 import path from "path";
 import fs from "fs";
 import os from "os";
-import { sync as makeDirSync } from "make-dir";
 import * as babel from "@babel/core";
 import findCacheDir from "find-cache-dir";
 
@@ -14,6 +13,8 @@ const DEFAULT_FILENAME = path.join(
 const FILENAME: string = process.env.BABEL_CACHE_PATH || DEFAULT_FILENAME;
 let data: Object = {};
 
+let cacheDirty = false;
+
 let cacheDisabled = false;
 
 function isCacheDisabled() {
@@ -24,7 +25,9 @@ function isCacheDisabled() {
  */
 
 export function save() {
-  if (isCacheDisabled()) return;
+  if (isCacheDisabled() || !cacheDirty) return;
+  cacheDirty = false;
+
   let serialised: string = "{}";
 
   try {
@@ -39,7 +42,7 @@ export function save() {
   }
 
   try {
-    makeDirSync(path.dirname(FILENAME));
+    fs.mkdirSync(path.dirname(FILENAME), { recursive: true });
     fs.writeFileSync(FILENAME, serialised);
   } catch (e) {
     switch (e.code) {
@@ -49,14 +52,14 @@ export function save() {
       case "EACCES":
       case "EPERM":
         console.warn(
-          `Babel could not write cache to file: ${FILENAME} 
+          `Babel could not write cache to file: ${FILENAME}
 due to a permission issue. Cache is disabled.`,
         );
         cacheDisabled = true;
         break;
       case "EROFS":
         console.warn(
-          `Babel could not write cache to file: ${FILENAME} 
+          `Babel could not write cache to file: ${FILENAME}
 because it resides in a readonly filesystem. Cache is disabled.`,
         );
         cacheDisabled = true;
@@ -111,6 +114,13 @@ due to a permission issue. Cache is disabled.`,
 
 export function get(): Object {
   return data;
+}
+
+/**
+ * Set the cache dirty bit.
+ */
+export function setDirty() {
+  cacheDirty = true;
 }
 
 /**

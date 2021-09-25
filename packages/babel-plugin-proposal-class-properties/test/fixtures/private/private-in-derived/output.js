@@ -1,11 +1,10 @@
-var _outer = new WeakMap();
+var _outer = /*#__PURE__*/new WeakMap();
 
 var Outer = function Outer() {
   "use strict";
 
   babelHelpers.classCallCheck(this, Outer);
-
-  _outer.set(this, {
+  babelHelpers.classPrivateFieldInitSpec(this, _outer, {
     writable: true,
     value: void 0
   });

@@ -16,8 +16,6 @@
 *.cache
 /build
 /.eslintcache
-/browser.js
-/browser-polyfill.js
 /runtime.js
 coverage
 dist
@@ -31,6 +29,7 @@ package-lock.json
 !/packages/babel-runtime/helpers/toArray.js
 !/packages/babel-runtime/helpers/iterableToArray.js
 !/packages/babel-runtime/helpers/temporalRef.js
+!/packages/babel-runtime/helpers/typeof.js
 /packages/babel-runtime/helpers/esm/*.js
 !/packages/babel-runtime/helpers/esm/toArray.js
 !/packages/babel-runtime/helpers/esm/iterableToArray.js
@@ -40,6 +39,7 @@ package-lock.json
 !/packages/babel-runtime-corejs2/helpers/toArray.js
 !/packages/babel-runtime-corejs2/helpers/iterableToArray.js
 !/packages/babel-runtime-corejs2/helpers/temporalRef.js
+!/packages/babel-runtime-corejs2/helpers/typeof.js
 /packages/babel-runtime-corejs2/helpers/esm/*.js
 !/packages/babel-runtime-corejs2/helpers/esm/toArray.js
 !/packages/babel-runtime-corejs2/helpers/esm/iterableToArray.js
@@ -70,3 +70,10 @@ packages/babel-standalone/babel.min.js
 /eslint/*/LICENSE
 !/packages/babel-eslint-plugin/LICENSE
 /.vscode
+# local directory for VSCode Extension - https://marketplace.visualstudio.com/items?itemName=xyz.local-history
+/.history
+
+/dts
+
+/test/runtime-integration/*/output.js
+/test/runtime-integration/*/absolute-output.js

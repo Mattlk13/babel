@@ -1,18 +1,23 @@
-import fs from "fs";
-import path from "path";
-import child from "child_process";
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const child = require("child_process");
 
 let currentHook;
 let currentOptions;
 let sourceMapSupport = false;
 
-const registerFile = require.resolve("../lib/node");
+const registerFile = require.resolve("../lib/index");
 const testCacheFilename = path.join(__dirname, ".babel");
 const testFile = require.resolve("./fixtures/babelrc/es2015");
 const testFileContent = fs.readFileSync(testFile);
 const sourceMapTestFile = require.resolve("./fixtures/source-map/index");
 const sourceMapNestedTestFile = require.resolve(
   "./fixtures/source-map/foo/bar",
+);
+const internalModulesTestFile = require.resolve(
+  "./fixtures/internal-modules/index",
 );
 
 jest.mock("pirates", () => {
@@ -38,7 +43,7 @@ jest.mock("source-map-support", () => {
 });
 
 const defaultOptions = {
-  exts: [".js", ".jsx", ".es6", ".es", ".mjs"],
+  exts: [".js", ".jsx", ".es6", ".es", ".mjs", ".cjs"],
   ignoreNodeModules: false,
 };
 
@@ -77,7 +82,13 @@ describe("@babel/register", function () {
     cleanCache();
   }
 
-  afterEach(() => {
+  afterEach(async () => {
+    // @babel/register saves the cache on process.nextTick.
+    // We need to wait for at least one tick so that when jest
+    // tears down the testing environment @babel/register has
+    // already finished.
+    await new Promise(setImmediate);
+
     revertRegister();
     currentHook = null;
     currentOptions = null;
@@ -134,7 +145,7 @@ describe("@babel/register", function () {
     expect(sourceMapSupport).toBe(false);
   });
 
-  it("returns concatenatable sourceRoot and sources", callback => {
+  it("returns concatenatable sourceRoot and sources", async () => {
     // The Source Maps R3 standard https://sourcemaps.info/spec.html states
     // that `sourceRoot` is “prepended to the individual entries in the
     // ‘source’ field.” If `sources` contains file names, and `sourceRoot`
@@ -145,32 +156,15 @@ describe("@babel/register", function () {
     // requires() another with @babel/register active, and I couldn’t get
     // that working inside a test, possibly because of jest’s mocking
     // hooks, so we spawn a separate process.
-
-    const args = ["-r", registerFile, sourceMapTestFile];
-    const spawn = child.spawn(process.execPath, args, { cwd: __dirname });
-
-    let output = "";
-
-    for (const stream of [spawn.stderr, spawn.stdout]) {
-      stream.on("data", chunk => {
-        output += chunk;
-      });
-    }
-
-    spawn.on("close", function () {
-      let err;
-
-      try {
-        const sourceMap = JSON.parse(output);
-        expect(sourceMap.map.sourceRoot + sourceMap.map.sources[0]).toBe(
-          sourceMapNestedTestFile,
-        );
-      } catch (e) {
-        err = e;
-      }
-
-      callback(err);
-    });
+    const output = await spawnNodeAsync([
+      "-r",
+      registerFile,
+      sourceMapTestFile,
+    ]);
+    const sourceMap = JSON.parse(output);
+    expect(sourceMap.map.sourceRoot + sourceMap.map.sources[0]).toBe(
+      sourceMapNestedTestFile,
+    );
   });
 
   test("hook transpiles with config", () => {
@@ -195,4 +189,34 @@ describe("@babel/register", function () {
 
     expect(result).toBe('"use strict";\n\nrequire("assert");');
   });
+
+  test("transforms modules used within register", async () => {
+    // Need a clean environment without `convert-source-map`
+    // already in the require cache, so we spawn a separate process
+
+    const output = await spawnNodeAsync([internalModulesTestFile]);
+    const { convertSourceMap } = JSON.parse(output);
+    expect(convertSourceMap).toMatch("/* transformed */");
+  });
 });
+
+function spawnNodeAsync(args) {
+  const spawn = child.spawn(process.execPath, args, { cwd: __dirname });
+
+  let output = "";
+  let callback;
+
+  for (const stream of [spawn.stderr, spawn.stdout]) {
+    stream.on("data", chunk => {
+      output += chunk;
+    });
+  }
+
+  spawn.on("close", function () {
+    callback(output);
+  });
+
+  return new Promise(resolve => {
+    callback = resolve;
+  });
+}

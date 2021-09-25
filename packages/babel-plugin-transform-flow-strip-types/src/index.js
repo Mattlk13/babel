@@ -9,7 +9,12 @@ export default declare((api, opts) => {
 
   let skipStrip = false;
 
-  const { requireDirective = false, allowDeclareFields = false } = opts;
+  const { requireDirective = false } = opts;
+
+  if (!process.env.BABEL_8_BREAKING) {
+    // eslint-disable-next-line no-var
+    var { allowDeclareFields = false } = opts;
+  }
 
   return {
     name: "transform-flow-strip-types",
@@ -90,20 +95,27 @@ export default declare((api, opts) => {
           if (child.isClassProperty()) {
             const { node } = child;
 
-            if (!allowDeclareFields && node.declare) {
-              throw child.buildCodeFrameError(
-                `The 'declare' modifier is only allowed when the ` +
-                  `'allowDeclareFields' option of ` +
-                  `@babel/plugin-transform-flow-strip-types or ` +
-                  `@babel/preset-flow is enabled.`,
-              );
+            if (!process.env.BABEL_8_BREAKING) {
+              if (!allowDeclareFields && node.declare) {
+                throw child.buildCodeFrameError(
+                  `The 'declare' modifier is only allowed when the ` +
+                    `'allowDeclareFields' option of ` +
+                    `@babel/plugin-transform-flow-strip-types or ` +
+                    `@babel/preset-flow is enabled.`,
+                );
+              }
             }
 
             if (node.declare) {
               child.remove();
-            } else if (!allowDeclareFields && !node.value && !node.decorators) {
-              child.remove();
             } else {
+              if (!process.env.BABEL_8_BREAKING) {
+                if (!allowDeclareFields && !node.value && !node.decorators) {
+                  child.remove();
+                  return;
+                }
+              }
+
               node.variance = null;
               node.typeAnnotation = null;
             }
@@ -118,6 +130,13 @@ export default declare((api, opts) => {
 
       Function({ node }) {
         if (skipStrip) return;
+        if (
+          node.params.length > 0 &&
+          node.params[0].type === "Identifier" &&
+          node.params[0].name === "this"
+        ) {
+          node.params.shift();
+        }
         for (let i = 0; i < node.params.length; i++) {
           const param = node.params[i];
           param.optional = false;

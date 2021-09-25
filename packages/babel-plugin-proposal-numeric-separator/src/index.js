@@ -9,7 +9,7 @@ import syntaxNumericSeparator from "@babel/plugin-syntax-numeric-separator";
  */
 function remover({ node }: NodePath<BigIntLiteral | NumericLiteral>) {
   const { extra } = node;
-  if (extra && extra.raw.includes("_")) {
+  if (extra?.raw?.includes("_")) {
     extra.raw = extra.raw.replace(/_/g, "");
   }
 }
@@ -19,7 +19,7 @@ export default declare(api => {
 
   return {
     name: "proposal-numeric-separator",
-    inherits: syntaxNumericSeparator,
+    inherits: syntaxNumericSeparator.default,
 
     visitor: {
       NumericLiteral: remover,

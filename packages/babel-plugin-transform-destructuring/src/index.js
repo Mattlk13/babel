@@ -4,17 +4,13 @@ import { types as t } from "@babel/core";
 export default declare((api, options) => {
   api.assertVersion(7);
 
-  const {
-    loose = false,
-    useBuiltIns = false,
-    allowArrayLike = false,
-  } = options;
+  const { useBuiltIns = false } = options;
 
-  if (typeof loose !== "boolean") {
-    throw new Error(`.loose must be a boolean or undefined`);
-  }
-
-  const arrayOnlySpread = loose;
+  const iterableIsArray = api.assumption("iterableIsArray") ?? options.loose;
+  const arrayLikeIsIterable =
+    options.allowArrayLike ?? api.assumption("arrayLikeIsIterable");
+  const objectRestNoSymbols =
+    api.assumption("objectRestNoSymbols") ?? options.loose;
 
   function getExtendsHelper(file) {
     return useBuiltIns
@@ -88,8 +84,8 @@ export default declare((api, options) => {
       this.nodes = opts.nodes || [];
       this.scope = opts.scope;
       this.kind = opts.kind;
-      this.arrayOnlySpread = opts.arrayOnlySpread;
-      this.allowArrayLike = opts.allowArrayLike;
+      this.iterableIsArray = opts.iterableIsArray;
+      this.arrayLikeIsIterable = opts.arrayLikeIsIterable;
       this.addHelper = opts.addHelper;
     }
 
@@ -141,12 +137,12 @@ export default declare((api, options) => {
 
     toArray(node, count) {
       if (
-        this.arrayOnlySpread ||
+        this.iterableIsArray ||
         (t.isIdentifier(node) && this.arrays[node.name])
       ) {
         return node;
       } else {
-        return this.scope.toArray(node, count, this.allowArrayLike);
+        return this.scope.toArray(node, count, this.arrayLikeIsIterable);
       }
     }
 
@@ -194,7 +190,7 @@ export default declare((api, options) => {
 
       const keys = [];
       let allLiteral = true;
-
+      let hasTemplateLiteral = false;
       for (let i = 0; i < pattern.properties.length; i++) {
         const prop = pattern.properties[i];
 
@@ -208,8 +204,9 @@ export default declare((api, options) => {
         const key = prop.key;
         if (t.isIdentifier(key) && !prop.computed) {
           keys.push(t.stringLiteral(key.name));
-        } else if (t.isTemplateLiteral(prop.key)) {
-          keys.push(t.cloneNode(prop.key));
+        } else if (t.isTemplateLiteral(key)) {
+          keys.push(t.cloneNode(key));
+          hasTemplateLiteral = true;
         } else if (t.isLiteral(key)) {
           keys.push(t.stringLiteral(String(key.value)));
         } else {
@@ -232,10 +229,24 @@ export default declare((api, options) => {
             t.memberExpression(keyExpression, t.identifier("map")),
             [this.addHelper("toPropertyKey")],
           );
+        } else if (!hasTemplateLiteral && !t.isProgram(this.scope.block)) {
+          // Hoist definition of excluded keys, so that it's not created each time.
+          const program = this.scope.path.findParent(path => path.isProgram());
+          const id = this.scope.generateUidIdentifier("excluded");
+
+          program.scope.push({
+            id,
+            init: keyExpression,
+            kind: "const",
+          });
+
+          keyExpression = t.cloneNode(id);
         }
 
         value = t.callExpression(
-          this.addHelper(`objectWithoutProperties${loose ? "Loose" : ""}`),
+          this.addHelper(
+            `objectWithoutProperties${objectRestNoSymbols ? "Loose" : ""}`,
+          ),
           [t.cloneNode(objRef), keyExpression],
         );
       }
@@ -527,8 +538,8 @@ export default declare((api, options) => {
           kind: left.kind,
           scope: scope,
           nodes: nodes,
-          arrayOnlySpread,
-          allowArrayLike,
+          iterableIsArray,
+          arrayLikeIsIterable,
           addHelper: name => this.addHelper(name),
         });
 
@@ -553,8 +564,8 @@ export default declare((api, options) => {
           kind: "let",
           scope: scope,
           nodes: nodes,
-          arrayOnlySpread,
-          allowArrayLike,
+          iterableIsArray,
+          arrayLikeIsIterable,
           addHelper: name => this.addHelper(name),
         });
         destructuring.init(pattern, ref);
@@ -572,8 +583,8 @@ export default declare((api, options) => {
           operator: node.operator,
           scope: scope,
           nodes: nodes,
-          arrayOnlySpread,
-          allowArrayLike,
+          iterableIsArray,
+          arrayLikeIsIterable,
           addHelper: name => this.addHelper(name),
         });
 
@@ -617,6 +628,7 @@ export default declare((api, options) => {
         if (!variableDeclarationHasPattern(node)) return;
 
         const nodeKind = node.kind;
+        const nodeLoc = node.loc;
         const nodes = [];
         let declar;
 
@@ -631,8 +643,8 @@ export default declare((api, options) => {
             nodes: nodes,
             scope: scope,
             kind: node.kind,
-            arrayOnlySpread,
-            allowArrayLike,
+            iterableIsArray,
+            arrayLikeIsIterable,
             addHelper: name => this.addHelper(name),
           });
 
@@ -666,6 +678,10 @@ export default declare((api, options) => {
           } else {
             // Make sure the original node kind is used for each compound declaration
             node.kind = nodeKind;
+            // Propagate the original declaration node's location
+            if (!node.loc) {
+              node.loc = nodeLoc;
+            }
             nodesOut.push(node);
             tail = t.isVariableDeclaration(node) ? node : null;
           }

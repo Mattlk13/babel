@@ -38,7 +38,8 @@ export function getPluginOption(
   return null;
 }
 
-const PIPELINE_PROPOSALS = ["minimal", "smart", "fsharp"];
+const PIPELINE_PROPOSALS = ["minimal", "fsharp", "hack", "smart"];
+const TOPIC_TOKENS = ["%", "#"];
 const RECORD_AND_TUPLE_SYNTAX_TYPES = ["hash", "bar"];
 
 export function validatePlugins(plugins: PluginList) {
@@ -74,35 +75,82 @@ export function validatePlugins(plugins: PluginList) {
     throw new Error("Cannot combine placeholders and v8intrinsic plugins.");
   }
 
-  if (
-    hasPlugin(plugins, "pipelineOperator") &&
-    !PIPELINE_PROPOSALS.includes(
-      getPluginOption(plugins, "pipelineOperator", "proposal"),
-    )
-  ) {
-    throw new Error(
-      "'pipelineOperator' requires 'proposal' option whose value should be one of: " +
-        PIPELINE_PROPOSALS.map(p => `'${p}'`).join(", "),
-    );
+  if (hasPlugin(plugins, "pipelineOperator")) {
+    const proposal = getPluginOption(plugins, "pipelineOperator", "proposal");
+
+    if (!PIPELINE_PROPOSALS.includes(proposal)) {
+      const proposalList = PIPELINE_PROPOSALS.map(p => `"${p}"`).join(", ");
+      throw new Error(
+        `"pipelineOperator" requires "proposal" option whose value must be one of: ${proposalList}.`,
+      );
+    }
+
+    const tupleSyntaxIsHash =
+      hasPlugin(plugins, "recordAndTuple") &&
+      getPluginOption(plugins, "recordAndTuple", "syntaxType") === "hash";
+
+    if (proposal === "hack") {
+      if (hasPlugin(plugins, "placeholders")) {
+        throw new Error(
+          "Cannot combine placeholders plugin and Hack-style pipes.",
+        );
+      }
+
+      if (hasPlugin(plugins, "v8intrinsic")) {
+        throw new Error(
+          "Cannot combine v8intrinsic plugin and Hack-style pipes.",
+        );
+      }
+
+      const topicToken = getPluginOption(
+        plugins,
+        "pipelineOperator",
+        "topicToken",
+      );
+
+      if (!TOPIC_TOKENS.includes(topicToken)) {
+        const tokenList = TOPIC_TOKENS.map(t => `"${t}"`).join(", ");
+
+        throw new Error(
+          `"pipelineOperator" in "proposal": "hack" mode also requires a "topicToken" option whose value must be one of: ${tokenList}.`,
+        );
+      }
+
+      if (topicToken === "#" && tupleSyntaxIsHash) {
+        throw new Error(
+          'Plugin conflict between `["pipelineOperator", { proposal: "hack", topicToken: "#" }]` and `["recordAndtuple", { syntaxType: "hash"}]`.',
+        );
+      }
+    } else if (proposal === "smart" && tupleSyntaxIsHash) {
+      throw new Error(
+        'Plugin conflict between `["pipelineOperator", { proposal: "smart" }]` and `["recordAndtuple", { syntaxType: "hash"}]`.',
+      );
+    }
   }
 
   if (hasPlugin(plugins, "moduleAttributes")) {
-    if (hasPlugin(plugins, "importAssertions")) {
+    if (process.env.BABEL_8_BREAKING) {
       throw new Error(
-        "Cannot combine importAssertions and moduleAttributes plugins.",
+        "`moduleAttributes` has been removed in Babel 8, please use `importAssertions` parser plugin, or `@babel/plugin-syntax-import-assertions`.",
       );
-    }
-    const moduleAttributesVerionPluginOption = getPluginOption(
-      plugins,
-      "moduleAttributes",
-      "version",
-    );
-    if (moduleAttributesVerionPluginOption !== "may-2020") {
-      throw new Error(
-        "The 'moduleAttributes' plugin requires a 'version' option," +
-          " representing the last proposal update. Currently, the" +
-          " only supported value is 'may-2020'.",
+    } else {
+      if (hasPlugin(plugins, "importAssertions")) {
+        throw new Error(
+          "Cannot combine importAssertions and moduleAttributes plugins.",
+        );
+      }
+      const moduleAttributesVerionPluginOption = getPluginOption(
+        plugins,
+        "moduleAttributes",
+        "version",
       );
+      if (moduleAttributesVerionPluginOption !== "may-2020") {
+        throw new Error(
+          "The 'moduleAttributes' plugin requires a 'version' option," +
+            " representing the last proposal update. Currently, the" +
+            " only supported value is 'may-2020'.",
+        );
+      }
     }
   }
 
@@ -116,6 +164,18 @@ export function validatePlugins(plugins: PluginList) {
       "'recordAndTuple' requires 'syntaxType' option whose value should be one of: " +
         RECORD_AND_TUPLE_SYNTAX_TYPES.map(p => `'${p}'`).join(", "),
     );
+  }
+
+  if (
+    hasPlugin(plugins, "asyncDoExpressions") &&
+    !hasPlugin(plugins, "doExpressions")
+  ) {
+    const error = new Error(
+      "'asyncDoExpressions' requires 'doExpressions', please add 'doExpressions' to parser plugins.",
+    );
+    // $FlowIgnore
+    error.missingPlugins = "doExpressions"; // so @babel/core can provide better error message
+    throw error;
   }
 }
 
@@ -138,6 +198,5 @@ export const mixinPlugins: { [name: string]: MixinPlugin } = {
   placeholders,
 };
 
-export const mixinPluginNames: $ReadOnlyArray<string> = Object.keys(
-  mixinPlugins,
-);
+export const mixinPluginNames: $ReadOnlyArray<string> =
+  Object.keys(mixinPlugins);

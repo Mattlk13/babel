@@ -1,8 +1,8 @@
 {
   "name": "@babel/standalone",
-  "version": "7.12.4",
+  "version": "7.15.7",
   "description": "Standalone build of Babel for use in non-Node.js environments.",
-  "main": "babel.js",
+  "main": "./babel.js",
   "files": [
     "babel.js",
     "babel.min.js"
@@ -32,9 +32,9 @@
     "@babel/plugin-proposal-private-property-in-object": "workspace:*",
     "@babel/plugin-proposal-throw-expressions": "workspace:*",
     "@babel/plugin-proposal-unicode-property-regex": "workspace:*",
-    "@babel/plugin-syntax-async-generators": "^7.8.0",
-    "@babel/plugin-syntax-class-properties": "workspace:*",
-    "@babel/plugin-syntax-class-static-block": "workspace:*",
+    "@babel/plugin-syntax-async-generators": "^7.8.4",
+    "@babel/plugin-syntax-class-properties": "^7.12.13",
+    "@babel/plugin-syntax-class-static-block": "^7.14.5",
     "@babel/plugin-syntax-decimal": "workspace:*",
     "@babel/plugin-syntax-decorators": "workspace:*",
     "@babel/plugin-syntax-do-expressions": "workspace:*",
@@ -45,11 +45,12 @@
     "@babel/plugin-syntax-import-assertions": "workspace:*",
     "@babel/plugin-syntax-import-meta": "^7.10.4",
     "@babel/plugin-syntax-jsx": "workspace:*",
-    "@babel/plugin-syntax-object-rest-spread": "^7.8.0",
-    "@babel/plugin-syntax-optional-catch-binding": "^7.8.0",
+    "@babel/plugin-syntax-module-blocks": "workspace:*",
+    "@babel/plugin-syntax-object-rest-spread": "^7.8.3",
+    "@babel/plugin-syntax-optional-catch-binding": "^7.8.3",
     "@babel/plugin-syntax-pipeline-operator": "workspace:*",
     "@babel/plugin-syntax-record-and-tuple": "workspace:*",
-    "@babel/plugin-syntax-top-level-await": "workspace:*",
+    "@babel/plugin-syntax-top-level-await": "^7.14.5",
     "@babel/plugin-syntax-typescript": "workspace:*",
     "@babel/plugin-transform-arrow-functions": "workspace:*",
     "@babel/plugin-transform-async-to-generator": "workspace:*",
@@ -105,9 +106,7 @@
     "@babel/preset-env": "workspace:*",
     "@babel/preset-flow": "workspace:*",
     "@babel/preset-react": "workspace:*",
-    "@babel/preset-typescript": "workspace:*",
-    "chalk": "^4.0.0",
-    "lodash": "^4.17.20"
+    "@babel/preset-typescript": "workspace:*"
   },
   "keywords": [
     "babel",
@@ -116,18 +115,21 @@
     "transpile",
     "transpiler"
   ],
-  "author": "Daniel Lo Nigro <daniel@dan.cx> (http://dan.cx/)",
+  "author": "The Babel Team (https://babel.dev/team)",
   "license": "MIT",
   "publishConfig": {
     "access": "public"
   },
   "bugs": {
-    "url": "https://github.com/babel/babel/issues"
+    "url": "https://github.com/babel/babel/issues?utf8=%E2%9C%93&q=is%3Aissue+label%3A%22pkg%3A%20standalone%22+is%3Aopen"
   },
-  "homepage": "https://babeljs.io/",
+  "homepage": "https://babel.dev/docs/en/next/babel-standalone",
   "repository": {
     "type": "git",
     "url": "https://github.com/babel/babel.git",
     "directory": "packages/babel-standalone"
+  },
+  "engines": {
+    "node": ">=6.9.0"
   }
 }

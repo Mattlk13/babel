@@ -4,6 +4,7 @@ ParameterList13.ts
 ParameterList4.ts
 ParameterList5.ts
 ParameterList6.ts
+abstractPropertyNegative.ts
 accessorParameterAccessibilityModifier.ts
 accessorWithoutBody1.ts
 accessorWithoutBody2.ts
@@ -25,7 +26,10 @@ amdModuleName2.ts
 anonClassDeclarationEmitIsAnon.ts
 anyDeclare.ts
 argumentsBindsToFunctionScopeArgumentList.ts
+argumentsReferenceInConstructor4_Js.ts
+argumentsReferenceInMethod4_Js.ts
 arrayOfExportedClass.ts
+asiAbstract.ts
 asyncFunctionsAcrossFiles.ts
 augmentExportEquals1.ts
 augmentExportEquals1_1.ts
@@ -67,7 +71,6 @@ classCannotExtendVar.ts
 classExpressionWithDecorator1.ts
 classExtendsAcrossFiles.ts
 classExtendsMultipleBaseClasses.ts
-classIndexer5.ts
 classOverloadForFunction.ts
 classWithEmptyTypeParameter.ts
 collisionExportsRequireAndClass.ts
@@ -78,12 +81,14 @@ conflictingTypeAnnotatedVar.ts
 constDeclarations-invalidContexts.ts
 constDeclarations-scopes.ts
 constDeclarations-validContexts.ts
+constEnumNamespaceReferenceCausesNoImport2.ts
 constEnumNoEmitReexport.ts
 constEnumNoPreserveDeclarationReexport.ts
 constEnumPreserveEmitReexport.ts
-controlFlowPrivateClassField.ts
+contextualOverloadListFromArrayUnion.ts
 convertKeywordsYes.ts
 declarationEmitAmdModuleNameDirective.ts
+declarationEmitCommonSourceDirectoryDoesNotContainAllFiles.ts
 declarationEmitComputedNameCausesImportToBePainted.ts
 declarationEmitComputedNameConstEnumAlias.ts
 declarationEmitCrossFileImportTypeOfAmbientModule.ts
@@ -97,12 +102,17 @@ declarationEmitExportAssignedNamespaceNoTripleSlashTypesReference.ts
 declarationEmitExportAssignment.ts
 declarationEmitExportDeclaration.ts
 declarationEmitExpressionInExtends6.ts
+declarationEmitExpressionWithNonlocalPrivateUniqueSymbol.ts
 declarationEmitForModuleImportingModuleAugmentationRetainsImport.ts
 declarationEmitForTypesWhichNeedImportTypes.ts
 declarationEmitInterfaceWithNonEntityNameExpressionHeritage.ts
+declarationEmitMixinPrivateProtected.ts
 declarationEmitPrefersPathKindBasedOnBundling.ts
 declarationEmitPrefersPathKindBasedOnBundling2.ts
+declarationEmitPrivatePromiseLikeInterface.ts
 declarationEmitPrivateSymbolCausesVarDeclarationEmit2.ts
+declarationEmitReadonlyComputedProperty.ts
+declarationEmitStringEnumUsedInNonlocalSpread.ts
 declarationImportTypeAliasInferredAndEmittable.ts
 declarationMapsMultifile.ts
 declarationMapsOutFile.ts
@@ -127,6 +137,8 @@ deleteOperator1.ts
 deleteOperatorInStrictMode.ts
 dependencyViaImportAlias.ts
 destructuredDeclarationEmit.ts
+divergentAccessors1.ts
+divergentAccessorsTypes1.ts
 doubleUnderscoreExportStarConflict.ts
 duplicateIdentifierBindingElementInParameterDeclaration1.ts
 duplicateIdentifierBindingElementInParameterDeclaration2.ts
@@ -210,6 +222,7 @@ exportSpecifierAndLocalMemberDeclaration.ts
 exportStarFromEmptyModule.ts
 exportStarNotElided.ts
 expressionsForbiddenInParameterInitializers.ts
+extendedUnicodePlaneIdentifiers.ts
 extendingClassFromAliasAndUsageInIndexer.ts
 extendsClauseAlreadySeen.ts
 extendsClauseAlreadySeen2.ts
@@ -221,11 +234,11 @@ functionCall15.ts
 functionDeclarationWithResolutionOfTypeNamedArguments01.ts
 functionExpressionInWithBlock.ts
 functionExpressionWithResolutionOfTypeNamedArguments01.ts
+getterErrorMessageNotDuplicated.ts
 gettersAndSettersErrors.ts
 giant.ts
 globalThisDeclarationEmit.ts
 globalThisDeclarationEmit2.ts
-hugeDeclarationOutputGetsTruncatedWithError.ts
 implementClausePrecedingExtends.ts
 implementsClauseAlreadySeen.ts
 importAndVariableDeclarationConflict1.ts
@@ -237,7 +250,6 @@ importDeclWithClassModifiers.ts
 importDeclWithDeclareModifierInAmbientContext.ts
 importHelpers.ts
 importHelpersAmd.ts
-importHelpersES6.ts
 importHelpersInAmbientContext.ts
 importHelpersInIsolatedModules.ts
 importHelpersInTsx.tsx
@@ -269,6 +281,8 @@ interfaceWithImplements1.ts
 invalidReferenceSyntax1.ts
 isLiteral1.ts
 isLiteral2.ts
+isolatedModulesImportConstEnum.ts
+isolatedModulesImportConstEnumTypeOnly.ts
 isolatedModulesReExportType.ts
 jsEnumTagOnObjectFrozen.ts
 jsExportMemberMergedWithModuleAugmentation.ts
@@ -281,7 +295,6 @@ jsNoImplicitAnyNoCascadingReferenceErrors.ts
 jsdocAccessEnumType.ts
 jsdocPropertyTagInvalid.ts
 jsxAttributeWithoutExpressionReact.tsx
-jsxIntrinsicElementsExtendsRecord.tsx
 letAndVarRedeclaration.ts
 letAsIdentifier.ts
 letAsIdentifierInStrictMode.ts
@@ -295,6 +308,12 @@ letDeclarations-scopes-duplicates6.ts
 letDeclarations-scopes-duplicates7.ts
 letDeclarations-scopes.ts
 letDeclarations-validContexts.ts
+letInConstDeclarations_ES5.ts
+letInConstDeclarations_ES6.ts
+letInLetConstDeclOfForOfAndForIn_ES5.ts
+letInLetConstDeclOfForOfAndForIn_ES6.ts
+letInLetDeclarations_ES5.ts
+letInLetDeclarations_ES6.ts
 mergeWithImportedType.ts
 mergedDeclarations6.ts
 metadataOfClassFromAlias.ts
@@ -329,7 +348,8 @@ moduleAugmentationsImports2.ts
 moduleAugmentationsImports3.ts
 moduleAugmentationsImports4.ts
 moduleDuplicateIdentifiers.ts
-moduleResolutionNoTs.ts
+moduleResolutionNoTsCJS.ts
+moduleResolutionNoTsESM.ts
 moduleResolutionWithSymlinks.ts
 moduleResolutionWithSymlinks_withOutDir.ts
 moduleResolution_automaticTypeDirectiveNames.ts
@@ -346,6 +366,7 @@ noBundledEmitFromNodeModules.ts
 noCrashOnImportShadowing.ts
 noImplicitAnyDestructuringVarDeclaration.ts
 noSymbolForMergeCrash.ts
+nodeModuleReexportFromDottedPath.ts
 nodeResolution4.ts
 nodeResolution6.ts
 nodeResolution8.ts
@@ -368,8 +389,6 @@ preserveUnusedImports.ts
 privacyCheckExternalModuleExportAssignmentOfGenericClass.ts
 privacyTopLevelAmbientExternalModuleImportWithExport.ts
 privacyTopLevelAmbientExternalModuleImportWithoutExport.ts
-privateFieldAssignabilityFromUnknown.ts
-privateNameWeakMapCollision.ts
 reExportGlobalDeclaration1.ts
 reExportUndefined1.ts
 reExportUndefined2.ts
@@ -391,9 +410,8 @@ shorthandPropertyAssignmentInES6Module.ts
 sourceMap-LineBreaks.ts
 sourceMapValidationDecorators.ts
 sourceMapValidationStatements.ts
-staticIndexer.ts
+stackDepthLimitCastingType.ts
 strictModeReservedWord.ts
-strictModeReservedWordInClassDeclaration.ts
 superCallFromClassThatHasNoBaseType1.ts
 symbolLinkDeclarationEmitModuleNames.ts
 symbolMergeValueAndImportedType.ts
@@ -416,6 +434,7 @@ typeReferenceDirectives7.ts
 typeReferenceDirectives8.ts
 typeReferenceDirectives9.ts
 uniqueSymbolPropertyDeclarationEmit.ts
+unusedImportWithSpread.ts
 unusedImports1.ts
 unusedImports11.ts
 unusedImports12.ts

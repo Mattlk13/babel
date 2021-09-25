@@ -41,7 +41,8 @@
                 "name": "A"
               }
             }
-          ]
+          ],
+          "hasUnknownMembers": false
         }
       }
     ],

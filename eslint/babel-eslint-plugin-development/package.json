@@ -1,17 +1,13 @@
 {
   "name": "@babel/eslint-plugin-development",
-  "version": "7.11.0",
+  "version": "7.14.5",
   "description": "ESLint rules that enforce best practices in the development of Babel plugins.",
   "keywords": [
     "eslint",
     "eslintplugin",
     "eslint-plugin"
   ],
-  "author": {
-    "name": "Nicolò Ribaudo",
-    "email": "nicolo.ribaudo@gmail.com",
-    "url": "https://github.com/nicolo-ribaudo"
-  },
+  "author": "The Babel Team (https://babel.dev/team)",
   "main": "./lib/index.js",
   "type": "commonjs",
   "exports": {
@@ -33,8 +29,8 @@
   "bugs": {
     "url": "https://github.com/babel/babel/issues"
   },
-  "homepage": "https://babeljs.io/",
+  "homepage": "https://babel.dev/",
   "devDependencies": {
-    "eslint": "^7.5.0"
+    "eslint": "^7.27.0"
   }
 }

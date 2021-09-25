@@ -1,12 +1,12 @@
-import deepClone from "lodash/cloneDeep";
+import cloneDeep from "clone-deep";
 import sourceMapSupport from "source-map-support";
 import * as registerCache from "./cache";
-import escapeRegExp from "lodash/escapeRegExp";
 import * as babel from "@babel/core";
 import { OptionManager, DEFAULT_EXTENSIONS } from "@babel/core";
 import { addHook } from "pirates";
 import fs from "fs";
 import path from "path";
+import Module from "module";
 
 const maps = {};
 let transformOpts = {};
@@ -42,7 +42,7 @@ function compile(code, filename) {
     // sourceRoot can be overwritten
     {
       sourceRoot: path.dirname(filename) + path.sep,
-      ...deepClone(transformOpts),
+      ...cloneDeep(transformOpts),
       filename,
     },
   );
@@ -56,9 +56,13 @@ function compile(code, filename) {
 
   if (env) cacheKey += `:${env}`;
 
-  let cached = cache && cache[cacheKey];
+  let cached, fileMtime;
+  if (cache) {
+    cached = cache[cacheKey];
+    fileMtime = mtime(filename);
+  }
 
-  if (!cached || cached.mtime !== mtime(filename)) {
+  if (!cached || cached.mtime !== fileMtime) {
     cached = babel.transform(code, {
       ...opts,
       sourceMaps: opts.sourceMaps === undefined ? "both" : opts.sourceMaps,
@@ -67,7 +71,8 @@ function compile(code, filename) {
 
     if (cache) {
       cache[cacheKey] = cached;
-      cached.mtime = mtime(filename);
+      cached.mtime = fileMtime;
+      registerCache.setDirty();
     }
   }
 
@@ -82,15 +87,19 @@ function compile(code, filename) {
 }
 
 let compiling = false;
+const internalModuleCache = Module._cache;
 
 function compileHook(code, filename) {
   if (compiling) return code;
 
+  const globalModuleCache = Module._cache;
   try {
     compiling = true;
+    Module._cache = internalModuleCache;
     return compile(code, filename);
   } finally {
     compiling = false;
+    Module._cache = globalModuleCache;
   }
 }
 
@@ -103,7 +112,9 @@ export function revert() {
   if (piratesRevert) piratesRevert();
 }
 
-register();
+function escapeRegExp(string) {
+  return string.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
+}
 
 export default function register(opts?: Object = {}) {
   // Clone to avoid mutating the arguments object with the 'delete's below.
@@ -140,16 +151,19 @@ export default function register(opts?: Object = {}) {
   if (transformOpts.ignore === undefined && transformOpts.only === undefined) {
     transformOpts.only = [
       // Only compile things inside the current working directory.
+      // $FlowIgnore
       new RegExp("^" + escapeRegExp(cwd), "i"),
     ];
     transformOpts.ignore = [
       // Ignore any node_modules inside the current working directory.
       new RegExp(
         "^" +
+          // $FlowIgnore
           escapeRegExp(cwd) +
           "(?:" +
           path.sep +
           ".*)?" +
+          // $FlowIgnore
           escapeRegExp(path.sep + "node_modules" + path.sep),
         "i",
       ),

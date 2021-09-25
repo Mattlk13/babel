@@ -4,10 +4,11 @@ import { types as t, template } from "@babel/core";
 
 export default declare((api, { loose = false }) => {
   api.assertVersion(7);
+  const noDocumentAll = api.assumption("noDocumentAll") ?? loose;
 
   return {
     name: "proposal-nullish-coalescing-operator",
-    inherits: syntaxNullishCoalescingOperator,
+    inherits: syntaxNullishCoalescingOperator.default,
 
     visitor: {
       LogicalExpression(path) {
@@ -38,7 +39,7 @@ export default declare((api, { loose = false }) => {
           t.conditionalExpression(
             // We cannot use `!= null` in spec mode because
             // `document.all == null` and `document.all` is not "nullish".
-            loose
+            noDocumentAll
               ? t.binaryExpression("!=", assignment, t.nullLiteral())
               : t.logicalExpression(
                   "&&",
