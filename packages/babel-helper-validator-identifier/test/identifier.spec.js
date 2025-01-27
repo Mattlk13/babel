@@ -1,4 +1,4 @@
-import { isIdentifierName } from "..";
+import { isIdentifierName } from "../lib/index.js";
 
 describe("isIdentifierName", function () {
   it("returns false if provided string is empty", function () {
@@ -28,6 +28,15 @@ describe("isIdentifierName", function () {
   );
   it("supports astral symbols", function () {
     expect(isIdentifierName("x\uDB40\uDDD5")).toBe(true);
+  });
+  it("supports Unicode 16.0", () => {
+    expect(isIdentifierName("\u{105c0}")).toBe(true);
+  });
+  it("supports Unicode 15.1", () => {
+    expect(isIdentifierName("\u{2ebf0}")).toBe(true);
+  });
+  it("supports Unicode 15", () => {
+    expect(isIdentifierName("\u{1e030}")).toBe(true);
   });
   it("supports Unicode 14", () => {
     expect(isIdentifierName("\u{10f70}")).toBe(true);

@@ -1,4 +1,6 @@
 {
-  "presets": [["@babel/preset-react", { "development": true, "runtime": "classic" }], "./my-preset"],
-  "os": ["linux", "darwin"]
+  "presets": [
+    ["react", { "development": true, "runtime": "classic" }],
+    "./my-preset"
+  ]
 }

@@ -1,8 +1,8 @@
 # @babel/plugin-proposal-async-do-expressions
 
-> Transforms async do expressions to ES2021
+> Transform async do expressions to ES2021
 
-See our website [@babel/plugin-proposal-async-do-expressions](https://babeljs.io/docs/en/babel-plugin-proposal-async-do-expressions) for more information.
+See our website [@babel/plugin-proposal-async-do-expressions](https://babeljs.io/docs/babel-plugin-proposal-async-do-expressions) for more information.
 
 ## Install
 

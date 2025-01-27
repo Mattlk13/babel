@@ -1,53 +1,51 @@
 import rewritePattern from "regexpu-core";
+import { types as t, type PluginObject, type NodePath } from "@babel/core";
+import annotateAsPure from "@babel/helper-annotate-as-pure";
+
+import semver from "semver";
+
 import {
   featuresKey,
   FEATURES,
   enableFeature,
   runtimeKey,
   hasFeature,
-} from "./features";
-import { generateRegexpuOptions } from "./util";
+} from "./features.ts";
+import {
+  generateRegexpuOptions,
+  canSkipRegexpu,
+  transformFlags,
+} from "./util.ts";
 
-import { types as t } from "@babel/core";
-import annotateAsPure from "@babel/helper-annotate-as-pure";
-
-type RegExpFlags = "i" | "g" | "m" | "s" | "u" | "y";
-
-/**
- * Remove given flag from given RegExpLiteral node
- *
- * @param {RegExpLiteral} node
- * @param {RegExpFlags} flag
- * @returns {void}
- */
-function pullFlag(node, flag: RegExpFlags): void {
-  node.flags = node.flags.replace(flag, "");
-}
-
-declare const PACKAGE_JSON: { name: string; version: string };
-
-// Note: Versions are represented as an integer. e.g. 7.1.5 is represented
-//       as 70000100005. This method is easier than using a semver-parsing
-//       package, but it breaks if we release x.y.z where x, y or z are
-//       greater than 99_999.
-const version = PACKAGE_JSON.version
-  .split(".")
-  .reduce((v, x) => v * 1e5 + +x, 0);
 const versionKey = "@babel/plugin-regexp-features/version";
+
+export interface Options {
+  name: string;
+  feature: keyof typeof FEATURES;
+  options?: {
+    useUnicodeFlag?: boolean;
+    runtime?: boolean;
+  };
+  manipulateOptions?: PluginObject["manipulateOptions"];
+}
 
 export function createRegExpFeaturePlugin({
   name,
   feature,
-  options = {} as any,
-}) {
+  options = {},
+  manipulateOptions = () => {},
+}: Options): PluginObject {
   return {
     name,
+
+    manipulateOptions,
+
     pre() {
       const { file } = this;
       const features = file.get(featuresKey) ?? 0;
       let newFeatures = enableFeature(features, FEATURES[feature]);
 
-      const { useUnicodeFlag, runtime = true } = options;
+      const { useUnicodeFlag, runtime } = options;
       if (useUnicodeFlag === false) {
         newFeatures = enableFeature(newFeatures, FEATURES.unicodeFlag);
       }
@@ -55,12 +53,51 @@ export function createRegExpFeaturePlugin({
         file.set(featuresKey, newFeatures);
       }
 
-      if (!runtime) {
-        file.set(runtimeKey, false);
+      if (runtime !== undefined) {
+        if (
+          file.has(runtimeKey) &&
+          file.get(runtimeKey) !== runtime &&
+          (process.env.BABEL_8_BREAKING ||
+            // This check. Is necessary because in Babel 7 we allow multiple
+            // copies of transform-named-capturing-groups-regex with
+            // conflicting 'runtime' options.
+            hasFeature(newFeatures, FEATURES.duplicateNamedCaptureGroups))
+        ) {
+          throw new Error(
+            `The 'runtime' option must be the same for ` +
+              `'@babel/plugin-transform-named-capturing-groups-regex' and ` +
+              `'@babel/plugin-transform-duplicate-named-capturing-groups-regex'.`,
+          );
+        }
+
+        if (process.env.BABEL_8_BREAKING) {
+          file.set(runtimeKey, runtime);
+        } else if (
+          // This check. Is necessary because in Babel 7 we allow multiple
+          // copies of transform-named-capturing-groups-regex with
+          // conflicting 'runtime' options.
+          feature === "namedCaptureGroups"
+        ) {
+          if (!runtime || !file.has(runtimeKey)) file.set(runtimeKey, runtime);
+        } else {
+          file.set(runtimeKey, runtime);
+        }
       }
 
-      if (!file.has(versionKey) || file.get(versionKey) < version) {
-        file.set(versionKey, version);
+      if (!process.env.BABEL_8_BREAKING) {
+        // Until 7.21.4, we used to encode the version as a number.
+        // If file.get(versionKey) is a number, it has thus been
+        // set by an older version of this plugin.
+        if (typeof file.get(versionKey) === "number") {
+          file.set(versionKey, PACKAGE_JSON.version);
+          return;
+        }
+      }
+      if (
+        !file.get(versionKey) ||
+        semver.lt(file.get(versionKey), PACKAGE_JSON.version)
+      ) {
+        file.set(versionKey, PACKAGE_JSON.version);
       }
     },
 
@@ -70,20 +107,39 @@ export function createRegExpFeaturePlugin({
         const { file } = this;
         const features = file.get(featuresKey);
         const runtime = file.get(runtimeKey) ?? true;
-        const regexpuOptions = generateRegexpuOptions(node, features);
-        if (regexpuOptions === null) {
+
+        const regexpuOptions = generateRegexpuOptions(node.pattern, features);
+        if (canSkipRegexpu(node, regexpuOptions)) {
           return;
         }
-        const namedCaptureGroups = {};
-        if (regexpuOptions.namedGroup) {
+
+        const namedCaptureGroups: Record<string, number | number[]> = {
+          __proto__: null,
+        };
+        if (regexpuOptions.namedGroups === "transform") {
           regexpuOptions.onNamedGroup = (name, index) => {
-            namedCaptureGroups[name] = index;
+            const prev = namedCaptureGroups[name];
+            if (typeof prev === "number") {
+              namedCaptureGroups[name] = [prev, index];
+            } else if (Array.isArray(prev)) {
+              prev.push(index);
+            } else {
+              namedCaptureGroups[name] = index;
+            }
           };
         }
+
+        let newFlags;
+        if (regexpuOptions.modifiers === "transform") {
+          regexpuOptions.onNewFlags = flags => {
+            newFlags = flags;
+          };
+        }
+
         node.pattern = rewritePattern(node.pattern, node.flags, regexpuOptions);
 
         if (
-          regexpuOptions.namedGroup &&
+          regexpuOptions.namedGroups === "transform" &&
           Object.keys(namedCaptureGroups).length > 0 &&
           runtime &&
           !isRegExpTest(path)
@@ -96,18 +152,14 @@ export function createRegExpFeaturePlugin({
 
           path.replaceWith(call);
         }
-        if (hasFeature(features, FEATURES.unicodeFlag)) {
-          pullFlag(node, "u");
-        }
-        if (hasFeature(features, FEATURES.dotAllFlag)) {
-          pullFlag(node, "s");
-        }
+
+        node.flags = transformFlags(regexpuOptions, newFlags ?? node.flags);
       },
     },
   };
 }
 
-function isRegExpTest(path) {
+function isRegExpTest(path: NodePath<t.RegExpLiteral>) {
   return (
     path.parentPath.isMemberExpression({
       object: path.node,

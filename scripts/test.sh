@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
 node="yarn node"
@@ -10,7 +10,7 @@ if [ "$TEST_DEBUG" ]; then
 fi
 
 if [ -n "$CI" ]; then
-  jestArgs+=("--maxWorkers=4")
+  jestArgs+=("--maxWorkers=100%")
   jestArgs+=("--ci")
 fi
 

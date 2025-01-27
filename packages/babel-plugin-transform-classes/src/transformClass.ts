@@ -1,13 +1,10 @@
-import type { NodePath, Visitor } from "@babel/traverse";
-import nameFunction from "@babel/helper-function-name";
-import ReplaceSupers, {
-  environmentVisitor,
-} from "@babel/helper-replace-supers";
-import optimiseCall from "@babel/helper-optimise-call-expression";
-import { traverse, template, types as t } from "@babel/core";
+import type { NodePath, Scope, File } from "@babel/core";
+import ReplaceSupers from "@babel/helper-replace-supers";
+import { template, types as t } from "@babel/core";
+import { visitors } from "@babel/traverse";
 import annotateAsPure from "@babel/helper-annotate-as-pure";
 
-import addCreateSuperHelper from "./inline-createSuper-helpers";
+import addCallSuperHelper from "./inline-callSuper-helpers.ts";
 
 type ClassAssumptions = {
   setClassMethods: boolean;
@@ -16,7 +13,13 @@ type ClassAssumptions = {
   noClassCalls: boolean;
 };
 
-function buildConstructor(classRef, constructorBody, node) {
+type ClassConstructor = t.ClassMethod & { kind: "constructor" };
+
+function buildConstructor(
+  classRef: t.Identifier,
+  constructorBody: t.BlockStatement,
+  node: t.Class,
+) {
   const func = t.functionDeclaration(
     t.cloneNode(classRef),
     [],
@@ -26,14 +29,74 @@ function buildConstructor(classRef, constructorBody, node) {
   return func;
 }
 
+type Descriptor = {
+  key: t.Expression;
+  get?: t.Expression | null;
+  set?: t.Expression | null;
+  value?: t.Expression | null;
+  constructor?: t.Expression | null;
+};
+
+type State = {
+  parent: t.Node;
+  scope: Scope;
+  node: t.Class;
+  path: NodePath<t.Class>;
+  file: File;
+
+  classId: t.Identifier | void;
+  classRef: t.Identifier;
+  superName: t.Expression | null;
+  superReturns: NodePath<t.ReturnStatement>[];
+  isDerived: boolean;
+  extendsNative: boolean;
+
+  construct: t.FunctionDeclaration;
+  constructorBody: t.BlockStatement;
+  userConstructor: ClassConstructor;
+  userConstructorPath: NodePath<ClassConstructor>;
+  hasConstructor: boolean;
+
+  body: t.Statement[];
+  superThises: NodePath<t.ThisExpression>[];
+  pushedInherits: boolean;
+  pushedCreateClass: boolean;
+  protoAlias: t.Identifier | null;
+  isLoose: boolean;
+
+  dynamicKeys: Map<string, t.Expression>;
+
+  methods: {
+    // 'list' is in the same order as the elements appear in the class body.
+    // if there aren't computed keys, we can safely reorder class elements
+    // and use 'map' to merge duplicates.
+    instance: {
+      hasComputed: boolean;
+      list: Descriptor[];
+      map: Map<string, Descriptor>;
+    };
+    static: {
+      hasComputed: boolean;
+      list: Descriptor[];
+      map: Map<string, Descriptor>;
+    };
+  };
+};
+
+type PropertyInfo = {
+  instance: t.ObjectExpression[] | null;
+  static: t.ObjectExpression[] | null;
+};
+
 export default function transformClass(
-  path: NodePath,
-  file: any,
+  path: NodePath<t.Class>,
+  file: File,
   builtinClasses: ReadonlySet<string>,
   isLoose: boolean,
   assumptions: ClassAssumptions,
+  supportUnicodeId: boolean,
 ) {
-  const classState = {
+  const classState: State = {
     parent: undefined,
     scope: undefined,
     node: undefined,
@@ -42,8 +105,7 @@ export default function transformClass(
 
     classId: undefined,
     classRef: undefined,
-    superFnId: undefined,
-    superName: undefined,
+    superName: null,
     superReturns: [],
     isDerived: false,
     extendsNative: false,
@@ -54,20 +116,16 @@ export default function transformClass(
     userConstructorPath: undefined,
     hasConstructor: false,
 
-    staticPropBody: [],
     body: [],
     superThises: [],
-    pushedConstructor: false,
     pushedInherits: false,
+    pushedCreateClass: false,
     protoAlias: null,
     isLoose: false,
 
     dynamicKeys: new Map(),
 
     methods: {
-      // 'list' is in the same order as the elements appear in the class body.
-      // if there aren't computed keys, we can safely reorder class elements
-      // and use 'map' to merge duplicates.
       instance: {
         hasComputed: false,
         list: [],
@@ -81,32 +139,30 @@ export default function transformClass(
     },
   };
 
-  const setState = newState => {
+  const setState = (newState: Partial<State>) => {
     Object.assign(classState, newState);
   };
 
-  const findThisesVisitor = traverse.visitors.merge([
-    environmentVisitor,
-    {
-      ThisExpression(path) {
-        classState.superThises.push(path);
-      },
+  const findThisesVisitor = visitors.environmentVisitor({
+    ThisExpression(path) {
+      classState.superThises.push(path);
     },
-  ]);
+  });
+
+  function createClassHelper(args: t.Expression[]) {
+    return t.callExpression(classState.file.addHelper("createClass"), args);
+  }
 
   /**
-   * Creates a class constructor or bail out if there is none
+   * Creates a class constructor or bail out if there is one
    */
   function maybeCreateConstructor() {
-    let hasConstructor = false;
-    const paths = classState.path.get("body.body");
-    for (const path of paths) {
-      hasConstructor = path.equals("kind", "constructor");
-      if (hasConstructor) break;
+    const classBodyPath = classState.path.get("body");
+    for (const path of classBodyPath.get("body")) {
+      if (path.isClassMethod({ kind: "constructor" })) return;
     }
-    if (hasConstructor) return;
 
-    let params, body;
+    let params: t.FunctionExpression["params"], body;
 
     if (classState.isDerived) {
       const constructor = template.expression.ast`
@@ -121,12 +177,10 @@ export default function transformClass(
       body = t.blockStatement([]);
     }
 
-    classState.path
-      .get("body")
-      .unshiftContainer(
-        "body",
-        t.classMethod("constructor", t.identifier("constructor"), params, body),
-      );
+    classBodyPath.unshiftContainer(
+      "body",
+      t.classMethod("constructor", t.identifier("constructor"), params, body),
+    );
   }
 
   function buildBody() {
@@ -151,7 +205,7 @@ export default function transformClass(
     for (const path of classBodyPaths) {
       const node = path.node;
 
-      if (path.isClassProperty()) {
+      if (path.isClassProperty() || path.isClassPrivateProperty()) {
         throw path.buildCodeFrameError("Missing class properties transform.");
       }
 
@@ -175,24 +229,35 @@ export default function transformClass(
 
         replaceSupers.replace();
 
-        const superReturns = [];
+        const superReturns: NodePath<t.ReturnStatement>[] = [];
         path.traverse(
-          traverse.visitors.merge([
-            environmentVisitor,
-            {
-              ReturnStatement(path) {
-                if (!path.getFunctionParent().isArrowFunctionExpression()) {
-                  superReturns.push(path);
-                }
-              },
+          visitors.environmentVisitor({
+            ReturnStatement(path) {
+              if (!path.getFunctionParent().isArrowFunctionExpression()) {
+                superReturns.push(path);
+              }
             },
-          ]),
+          }),
         );
 
         if (isConstructor) {
-          pushConstructor(superReturns, node, path);
+          pushConstructor(superReturns, node as ClassConstructor, path);
         } else {
-          pushMethod(node, path);
+          if (!process.env.BABEL_8_BREAKING && !USE_ESM && !IS_STANDALONE) {
+            // polyfill when being run by an older Babel version
+            path.ensureFunctionName ??=
+              // eslint-disable-next-line no-restricted-globals
+              require("@babel/traverse").NodePath.prototype.ensureFunctionName;
+          }
+          path.ensureFunctionName(supportUnicodeId);
+          let wrapped;
+          if (node !== path.node) {
+            wrapped = path.node;
+            // The node has been wrapped. Reset it to the original once, but store the wrapper.
+            path.replaceWith(node);
+          }
+
+          pushMethod(node, wrapped);
         }
       }
     }
@@ -203,19 +268,19 @@ export default function transformClass(
 
     const { body } = classState;
 
-    const props = {
+    const props: PropertyInfo = {
       instance: null,
       static: null,
     };
 
-    for (const placement of ["static", "instance"]) {
+    for (const placement of ["static", "instance"] as const) {
       if (classState.methods[placement].list.length) {
         props[placement] = classState.methods[placement].list.map(desc => {
           const obj = t.objectExpression([
             t.objectProperty(t.identifier("key"), desc.key),
           ]);
 
-          for (const kind of ["get", "set", "value"]) {
+          for (const kind of ["get", "set", "value"] as const) {
             if (desc[kind] != null) {
               obj.properties.push(
                 t.objectProperty(t.identifier(kind), desc[kind]),
@@ -241,15 +306,17 @@ export default function transformClass(
       }
       args = args.slice(0, lastNonNullIndex + 1);
 
-      body.push(
-        t.expressionStatement(
-          t.callExpression(classState.file.addHelper("createClass"), args),
-        ),
-      );
+      body.push(t.returnStatement(createClassHelper(args)));
+      classState.pushedCreateClass = true;
     }
   }
 
-  function wrapSuperCall(bareSuper, superRef, thisRef, body) {
+  function wrapSuperCall(
+    bareSuper: NodePath<t.CallExpression>,
+    superRef: t.Expression,
+    thisRef: () => t.Identifier,
+    body: NodePath<t.BlockStatement>,
+  ) {
     const bareSuperNode = bareSuper.node;
     let call;
 
@@ -277,12 +344,41 @@ export default function transformClass(
 
       call = t.logicalExpression("||", bareSuperNode, t.thisExpression());
     } else {
-      call = optimiseCall(
-        t.cloneNode(classState.superFnId),
+      const args: t.Expression[] = [
         t.thisExpression(),
-        bareSuperNode.arguments,
-        false,
-      );
+        t.cloneNode(classState.classRef),
+      ];
+      if (bareSuperNode.arguments?.length) {
+        const bareSuperNodeArguments = bareSuperNode.arguments as (
+          | t.Expression
+          | t.SpreadElement
+        )[];
+
+        /**
+         * test262/test/language/expressions/super/call-spread-err-sngl-err-itr-get-get.js
+         *
+         * var iter = {};
+         * Object.defineProperty(iter, Symbol.iterator, {
+         *   get: function() {
+         *     throw new Test262Error();
+         *   }
+         * })
+         * super(...iter);
+         */
+
+        if (
+          bareSuperNodeArguments.length === 1 &&
+          t.isSpreadElement(bareSuperNodeArguments[0]) &&
+          t.isIdentifier(bareSuperNodeArguments[0].argument, {
+            name: "arguments",
+          })
+        ) {
+          args.push(bareSuperNodeArguments[0].argument);
+        } else {
+          args.push(t.arrayExpression(bareSuperNodeArguments));
+        }
+      }
+      call = t.callExpression(addCallSuperHelper(classState.file), args);
     }
 
     if (
@@ -309,13 +405,94 @@ export default function transformClass(
     const path = classState.userConstructorPath;
     const body = path.get("body");
 
+    const constructorBody = path.get("body");
+
+    let maxGuaranteedSuperBeforeIndex = constructorBody.node.body.length;
+
     path.traverse(findThisesVisitor);
 
     let thisRef = function () {
       const ref = path.scope.generateDeclaredUidIdentifier("this");
+      maxGuaranteedSuperBeforeIndex++;
       thisRef = () => t.cloneNode(ref);
       return ref;
     };
+
+    const buildAssertThisInitialized = function () {
+      return t.callExpression(
+        classState.file.addHelper("assertThisInitialized"),
+        [thisRef()],
+      );
+    };
+
+    const bareSupers: NodePath<t.CallExpression>[] = [];
+    path.traverse(
+      visitors.environmentVisitor({
+        Super(path) {
+          const { node, parentPath } = path;
+          if (parentPath.isCallExpression({ callee: node })) {
+            bareSupers.unshift(parentPath);
+          }
+        },
+      }),
+    );
+
+    for (const bareSuper of bareSupers) {
+      wrapSuperCall(bareSuper, classState.superName, thisRef, body);
+
+      if (maxGuaranteedSuperBeforeIndex >= 0) {
+        let lastParentPath: NodePath;
+        bareSuper.find(function (parentPath) {
+          // hit top so short circuit
+          if (parentPath === constructorBody) {
+            maxGuaranteedSuperBeforeIndex = Math.min(
+              maxGuaranteedSuperBeforeIndex,
+              lastParentPath.key as number,
+            );
+            return true;
+          }
+
+          const { type } = parentPath;
+          switch (type) {
+            case "ExpressionStatement":
+            case "SequenceExpression":
+            case "AssignmentExpression":
+            case "BinaryExpression":
+            case "MemberExpression":
+            case "CallExpression":
+            case "NewExpression":
+            case "VariableDeclarator":
+            case "VariableDeclaration":
+            case "BlockStatement":
+            case "ArrayExpression":
+            case "ObjectExpression":
+            case "ObjectProperty":
+            case "TemplateLiteral":
+              lastParentPath = parentPath;
+              return false;
+            default:
+              if (
+                (type === "LogicalExpression" &&
+                  parentPath.node.left === lastParentPath.node) ||
+                (parentPath.isConditional() &&
+                  parentPath.node.test === lastParentPath.node) ||
+                (type === "OptionalCallExpression" &&
+                  parentPath.node.callee === lastParentPath.node) ||
+                (type === "OptionalMemberExpression" &&
+                  parentPath.node.object === lastParentPath.node)
+              ) {
+                lastParentPath = parentPath;
+                return false;
+              }
+          }
+
+          maxGuaranteedSuperBeforeIndex = -1;
+          return true;
+        });
+      }
+    }
+
+    const guaranteedCalls = new Set<NodePath>();
 
     for (const thisPath of classState.superThises) {
       const { node, parentPath } = thisPath;
@@ -323,80 +500,77 @@ export default function transformClass(
         thisPath.replaceWith(thisRef());
         continue;
       }
-      thisPath.replaceWith(
-        t.callExpression(classState.file.addHelper("assertThisInitialized"), [
-          thisRef(),
-        ]),
-      );
-    }
 
-    const bareSupers = new Set<NodePath<t.CallExpression>>();
-    path.traverse(
-      traverse.visitors.merge([
-        environmentVisitor,
-        {
-          Super(path) {
-            const { node, parentPath } = path;
-            if (parentPath.isCallExpression({ callee: node })) {
-              bareSupers.add(parentPath);
-            }
-          },
-        } as Visitor,
-      ]),
-    );
+      let thisIndex: number;
+      thisPath.find(function (parentPath) {
+        if (parentPath.parentPath === constructorBody) {
+          thisIndex = parentPath.key as number;
+          return true;
+        }
+      });
 
-    let guaranteedSuperBeforeFinish = !!bareSupers.size;
+      let exprPath: NodePath = thisPath.parentPath.isSequenceExpression()
+        ? thisPath.parentPath
+        : thisPath;
+      if (
+        exprPath.listKey === "arguments" &&
+        (exprPath.parentPath.isCallExpression() ||
+          exprPath.parentPath.isOptionalCallExpression())
+      ) {
+        exprPath = exprPath.parentPath;
+      } else {
+        exprPath = null;
+      }
 
-    for (const bareSuper of bareSupers) {
-      wrapSuperCall(bareSuper, classState.superName, thisRef, body);
-
-      if (guaranteedSuperBeforeFinish) {
-        bareSuper.find(function (parentPath) {
-          // hit top so short circuit
-          if (parentPath === path) {
-            return true;
-          }
-
-          if (
-            parentPath.isLoop() ||
-            parentPath.isConditional() ||
-            parentPath.isArrowFunctionExpression()
-          ) {
-            guaranteedSuperBeforeFinish = false;
-            return true;
-          }
-        });
+      if (
+        (maxGuaranteedSuperBeforeIndex !== -1 &&
+          thisIndex > maxGuaranteedSuperBeforeIndex) ||
+        guaranteedCalls.has(exprPath)
+      ) {
+        thisPath.replaceWith(thisRef());
+      } else {
+        if (exprPath) {
+          guaranteedCalls.add(exprPath);
+        }
+        thisPath.replaceWith(buildAssertThisInitialized());
       }
     }
 
     let wrapReturn;
 
     if (classState.isLoose) {
-      wrapReturn = returnArg => {
-        const thisExpr = t.callExpression(
-          classState.file.addHelper("assertThisInitialized"),
-          [thisRef()],
-        );
+      wrapReturn = (returnArg: t.Expression | void) => {
+        const thisExpr = buildAssertThisInitialized();
         return returnArg
           ? t.logicalExpression("||", returnArg, thisExpr)
           : thisExpr;
       };
     } else {
-      wrapReturn = returnArg =>
-        t.callExpression(
+      wrapReturn = (returnArg: t.Expression | undefined) => {
+        const returnParams: t.Expression[] = [thisRef()];
+        if (returnArg != null) {
+          returnParams.push(returnArg);
+        }
+        return t.callExpression(
           classState.file.addHelper("possibleConstructorReturn"),
-          [thisRef()].concat(returnArg || []),
+          returnParams,
         );
+      };
     }
 
     // if we have a return as the last node in the body then we've already caught that
     // return
     const bodyPaths = body.get("body");
+    const guaranteedSuperBeforeFinish =
+      maxGuaranteedSuperBeforeIndex !== -1 &&
+      maxGuaranteedSuperBeforeIndex < bodyPaths.length;
     if (!bodyPaths.length || !bodyPaths.pop().isReturnStatement()) {
       body.pushContainer(
         "body",
         t.returnStatement(
-          guaranteedSuperBeforeFinish ? thisRef() : wrapReturn(),
+          guaranteedSuperBeforeFinish
+            ? thisRef()
+            : buildAssertThisInitialized(),
         ),
       );
     }
@@ -411,11 +585,9 @@ export default function transformClass(
   /**
    * Push a method to its respective mutatorMap.
    */
-  function pushMethod(node: t.ClassMethod, path?: NodePath) {
-    const scope = path ? path.scope : classState.scope;
-
+  function pushMethod(node: t.ClassMethod, wrapped?: t.Expression) {
     if (node.kind === "method") {
-      if (processMethod(node, scope)) return;
+      if (processMethod(node)) return;
     }
 
     const placement = node.static ? "static" : "instance";
@@ -426,20 +598,11 @@ export default function transformClass(
       t.isNumericLiteral(node.key) || t.isBigIntLiteral(node.key)
         ? t.stringLiteral(String(node.key.value))
         : t.toComputedKey(node);
+    methods.hasComputed = !t.isStringLiteral(key);
 
-    let fn = t.toExpression(node);
+    const fn: t.Expression = wrapped ?? t.toExpression(node);
 
-    if (t.isStringLiteral(key)) {
-      // infer function name
-      if (node.kind === "method") {
-        fn = nameFunction({ id: key, node: node, scope });
-      }
-    } else {
-      // todo(flow->ts) find a way to avoid "key as t.StringLiteral" below which relies on this assignment
-      methods.hasComputed = true;
-    }
-
-    let descriptor;
+    let descriptor: Descriptor;
     if (
       !methods.hasComputed &&
       methods.map.has((key as t.StringLiteral).value)
@@ -454,7 +617,12 @@ export default function transformClass(
         descriptor.value = null;
       }
     } else {
-      descriptor = { key: key, [descKey]: fn };
+      descriptor = {
+        key:
+          // private name has been handled in class-properties transform
+          key as t.Expression,
+        [descKey]: fn,
+      } as Descriptor;
       methods.list.push(descriptor);
 
       if (!methods.hasComputed) {
@@ -463,7 +631,7 @@ export default function transformClass(
     }
   }
 
-  function processMethod(node, scope) {
+  function processMethod(node: t.ClassMethod) {
     if (assumptions.setClassMethods && !node.decorators) {
       // use assignments instead of define properties for loose classes
       let { classRef } = classState;
@@ -477,23 +645,16 @@ export default function transformClass(
         node.computed || t.isLiteral(node.key),
       );
 
-      let func = t.functionExpression(
-        null,
+      const func: t.Expression = t.functionExpression(
+        // @ts-expect-error We actually set and id through .ensureFunctionName
+        node.id,
+        // @ts-expect-error Fixme: should throw when we see TSParameterProperty
         node.params,
         node.body,
         node.generator,
         node.async,
       );
       t.inherits(func, node);
-
-      const key = t.toComputedKey(node, node.key);
-      if (t.isStringLiteral(key)) {
-        func = nameFunction({
-          node: func,
-          id: key,
-          scope,
-        });
-      }
 
       const expr = t.expressionStatement(
         t.assignmentExpression("=", methodName, func),
@@ -525,9 +686,9 @@ export default function transformClass(
    * Replace the constructor body of our class.
    */
   function pushConstructor(
-    superReturns,
-    method: t.ClassMethod,
-    path: NodePath,
+    superReturns: NodePath<t.ReturnStatement>[],
+    method: ClassConstructor,
+    path: NodePath<ClassConstructor>,
   ) {
     setState({
       userConstructorPath: path,
@@ -540,25 +701,17 @@ export default function transformClass(
 
     t.inheritsComments(construct, method);
 
+    // @ts-expect-error Fixme: should throw when we see TSParameterProperty
     construct.params = method.params;
 
     t.inherits(construct.body, method.body);
     construct.body.directives = method.body.directives;
 
-    pushConstructorToBody();
-  }
-
-  function pushConstructorToBody() {
-    if (classState.pushedConstructor) return;
-    classState.pushedConstructor = true;
-
     // we haven't pushed any descriptors yet
-    // @ts-expect-error todo(flow->ts) maybe remove this block - properties from condition are not used anywhere esle
+    // @ts-expect-error todo(flow->ts) maybe remove this block - properties from condition are not used anywhere else
     if (classState.hasInstanceDescriptors || classState.hasStaticDescriptors) {
       pushDescriptors();
     }
-
-    classState.body.push(classState.construct);
 
     pushInheritsToBody();
   }
@@ -569,25 +722,10 @@ export default function transformClass(
   function pushInheritsToBody() {
     if (!classState.isDerived || classState.pushedInherits) return;
 
-    const superFnId = path.scope.generateUidIdentifier("super");
-
-    setState({ pushedInherits: true, superFnId });
+    classState.pushedInherits = true;
 
     // Unshift to ensure that the constructor inheritance is set up before
     // any properties can be assigned to the prototype.
-
-    if (!assumptions.superIsCallableConstructor) {
-      classState.body.unshift(
-        t.variableDeclaration("var", [
-          t.variableDeclarator(
-            superFnId,
-            t.callExpression(addCreateSuperHelper(classState.file), [
-              t.cloneNode(classState.classRef),
-            ]),
-          ),
-        ]),
-      );
-    }
 
     classState.body.unshift(
       t.expressionStatement(
@@ -602,15 +740,11 @@ export default function transformClass(
   }
 
   function extractDynamicKeys() {
-    const { dynamicKeys, node, scope } = classState as {
-      dynamicKeys: Map<string, t.Expression>;
-      node: t.Class;
-      scope: NodePath["scope"];
-    };
+    const { dynamicKeys, node, scope } = classState;
 
     for (const elem of node.body.body) {
       if (!t.isClassMethod(elem) || !elem.computed) continue;
-      if (scope.isPure(elem.key, /* constatns only*/ true)) continue;
+      if (scope.isPure(elem.key, /* constants only*/ true)) continue;
 
       const id = scope.generateUidIdentifierBasedOnNode(elem.key);
       dynamicKeys.set(id.name, elem.key);
@@ -651,8 +785,8 @@ export default function transformClass(
   }
 
   function classTransformer(
-    path: NodePath,
-    file,
+    path: NodePath<t.Class>,
+    file: File,
     builtinClasses: ReadonlySet<string>,
     isLoose: boolean,
   ) {
@@ -678,7 +812,7 @@ export default function transformClass(
 
     setState({
       extendsNative:
-        classState.isDerived &&
+        t.isIdentifier(classState.superName) &&
         builtinClasses.has(classState.superName.name) &&
         !classState.scope.hasBinding(
           classState.superName.name,
@@ -711,14 +845,8 @@ export default function transformClass(
       );
     }
 
-    body.push(
-      ...classState.staticPropBody.map(fn =>
-        fn(t.cloneNode(classState.classRef)),
-      ),
-    );
-
     const isStrict = path.isInStrictMode();
-    let constructorOnly = classState.classId && body.length === 1;
+    let constructorOnly = body.length === 0;
     if (constructorOnly && !isStrict) {
       for (const param of classState.construct.params) {
         // It's illegal to put a use strict directive into the body of a function
@@ -731,17 +859,31 @@ export default function transformClass(
       }
     }
 
-    const directives = constructorOnly ? body[0].body.directives : [];
+    const directives = constructorOnly
+      ? classState.construct.body.directives
+      : [];
     if (!isStrict) {
       directives.push(t.directive(t.directiveLiteral("use strict")));
     }
 
     if (constructorOnly) {
       // named class with only a constructor
-      return t.toExpression(body[0]);
+      const expr = t.toExpression(classState.construct);
+      return classState.isLoose ? expr : createClassHelper([expr]);
     }
 
-    body.push(t.returnStatement(t.cloneNode(classState.classRef)));
+    if (!classState.pushedCreateClass) {
+      body.push(
+        t.returnStatement(
+          classState.isLoose
+            ? t.cloneNode(classState.classRef)
+            : createClassHelper([t.cloneNode(classState.classRef)]),
+        ),
+      );
+    }
+
+    body.unshift(classState.construct);
+
     const container = t.arrowFunctionExpression(
       closureParams,
       t.blockStatement(body, directives),

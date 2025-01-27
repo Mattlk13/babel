@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copied from https://github.com/facebook/create-react-app/blob/053f9774d3f592c17741d2a86de66a7ca58f90c0/tasks/local-registry.sh
 
@@ -9,8 +9,7 @@ function startLocalRegistry {
   # Start local registry
   tmp_registry_log=`mktemp`
   echo "Registry output file: $tmp_registry_log"
-  (cd && nohup npx verdaccio@~5.1.2 -c $1 &>$tmp_registry_log &)
-  YARN_IGNORE_PATH=1 yarn global add verdaccio-memory@~10.0.0
+  (cd && nohup npx verdaccio@~5.13.1 -c $1 &>$tmp_registry_log &)
   # Wait for Verdaccio to boot
   grep -q "http address" <(tail -f $tmp_registry_log)
 

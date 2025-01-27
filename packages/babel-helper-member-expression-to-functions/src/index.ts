@@ -16,17 +16,16 @@ import {
   logicalExpression,
   memberExpression,
   nullLiteral,
-  numericLiteral,
   optionalCallExpression,
   optionalMemberExpression,
   sequenceExpression,
-  unaryExpression,
+  updateExpression,
 } from "@babel/types";
 import type * as t from "@babel/types";
-import { willPathCastToBoolean } from "./util";
+import { willPathCastToBoolean } from "./util.ts";
 
 class AssignmentMemoiser {
-  private _map: WeakMap<t.Expression, { count: number; value: t.LVal }>;
+  private _map: WeakMap<t.Expression, { count: number; value: t.Identifier }>;
   constructor() {
     this._map = new WeakMap();
   }
@@ -50,7 +49,7 @@ class AssignmentMemoiser {
     return value;
   }
 
-  set(key: t.Expression, value: t.LVal, count: number) {
+  set(key: t.Expression, value: t.Identifier, count: number) {
     return this._map.set(key, { count, value });
   }
 }
@@ -67,11 +66,12 @@ function toNonOptional(
   if (path.isOptionalCallExpression()) {
     const callee = path.get("callee");
     if (path.node.optional && callee.isOptionalMemberExpression()) {
-      const { object } = callee.node;
-      const context = path.scope.maybeGenerateMemoised(object) || object;
+      // object must be a conditional expression because the optional private access in object has been transformed
+      const object = callee.node.object as t.ConditionalExpression;
+      const context = path.scope.maybeGenerateMemoised(object);
       callee
         .get("object")
-        .replaceWith(assignmentExpression("=", context as t.LVal, object));
+        .replaceWith(assignmentExpression("=", context, object));
 
       return callExpression(memberExpression(base, identifier("call")), [
         context,
@@ -96,7 +96,13 @@ function isInDetachedTree(path: NodePath) {
     const { parentPath, container, listKey } = path;
     const parentNode = parentPath.node;
     if (listKey) {
-      if (container !== parentNode[listKey]) return true;
+      if (
+        container !==
+        // @ts-expect-error listKey must be a valid parent node key
+        parentNode[listKey]
+      ) {
+        return true;
+      }
     } else {
       if (container !== parentNode) return true;
     }
@@ -151,7 +157,7 @@ const handle = {
 
       // Replace `function (a, x = a.b?.#c) {}` to `function (a, x = (() => a.b?.#c)() ){}`
       // so the temporary variable can be injected in correct scope
-      // This can be further optimized to avoid unecessary IIFE
+      // This can be further optimized to avoid unnecessary IIFE
       if (scope.path.isPattern()) {
         endPath.replaceWith(
           // The injected member will be queued and eventually transformed when visited
@@ -163,12 +169,12 @@ const handle = {
       const willEndPathCastToBoolean = willPathCastToBoolean(endPath);
 
       const rootParentPath = endPath.parentPath;
-      if (
-        rootParentPath.isUpdateExpression({ argument: node }) ||
-        rootParentPath.isAssignmentExpression({ left: node })
-      ) {
-        throw member.buildCodeFrameError(`can't handle assignment`);
+      if (rootParentPath.isUpdateExpression({ argument: node })) {
+        throw member.buildCodeFrameError(`can't handle update expression`);
       }
+      const isAssignment = rootParentPath.isAssignmentExpression({
+        left: endPath.node,
+      });
       const isDeleteOperation = rootParentPath.isUnaryExpression({
         operator: "delete",
       });
@@ -209,10 +215,9 @@ const handle = {
         );
       }
 
-      const startingProp = startingOptional.isOptionalMemberExpression()
-        ? "object"
-        : "callee";
-      const startingNode = startingOptional.node[startingProp];
+      const startingNode = startingOptional.isOptionalMemberExpression()
+        ? startingOptional.node.object
+        : startingOptional.node.callee;
       const baseNeedsMemoised = scope.maybeGenerateMemoised(startingNode);
       const baseRef = baseNeedsMemoised ?? startingNode;
 
@@ -239,6 +244,14 @@ const handle = {
       } else if (parentIsCall) {
         // `(a?.#b)()` to `(a == null ? void 0 : a.#b.bind(a))()`
         member.replaceWith(this.boundGet(member));
+      } else if (
+        (process.env.BABEL_8_BREAKING || this.delete) &&
+        parentPath.isUnaryExpression({ operator: "delete" })
+      ) {
+        parentPath.replaceWith(this.delete(member));
+      } else if (parentPath.isAssignmentExpression()) {
+        // `a?.#b = c` to `(a == null ? void 0 : a.#b = c)`
+        handleAssignment(this, member, parentPath);
       } else {
         member.replaceWith(this.get(member));
       }
@@ -271,18 +284,29 @@ const handle = {
         const { object } = regular;
         context = member.scope.maybeGenerateMemoised(object);
         if (context) {
-          regular.object = assignmentExpression("=", context, object);
+          regular.object = assignmentExpression(
+            "=",
+            context,
+            // object must not be Super when `context` is an identifier
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+            object as t.Expression,
+          );
         }
       }
 
       let replacementPath: NodePath = endPath;
-      if (isDeleteOperation) {
+      if (isDeleteOperation || isAssignment) {
         replacementPath = endParentPath;
         regular = endParentPath.node;
       }
 
       const baseMemoised = baseNeedsMemoised
-        ? assignmentExpression("=", cloneNode(baseRef), cloneNode(startingNode))
+        ? assignmentExpression(
+            "=",
+            // When base needs memoised, the baseRef must be an identifier
+            cloneNode(baseRef as t.Identifier),
+            cloneNode(startingNode),
+          )
         : cloneNode(baseRef);
 
       if (willEndPathCastToBoolean) {
@@ -350,8 +374,8 @@ const handle = {
       return;
     }
 
-    // MEMBER++   ->   _set(MEMBER, (_ref = (+_get(MEMBER))) + 1), _ref
-    // ++MEMBER   ->   _set(MEMBER, (+_get(MEMBER)) + 1)
+    // MEMBER++   ->   _set(MEMBER, (ref = _get(MEMBER), ref2 = ref++, ref)), ref2
+    // ++MEMBER   ->   _set(MEMBER, (ref = _get(MEMBER), ++ref))
     if (isUpdateExpression(parent, { argument: node })) {
       if (this.simpleSet) {
         member.replaceWith(this.simpleSet(member));
@@ -365,75 +389,50 @@ const handle = {
       // assignment.
       this.memoise(member, 2);
 
-      const value = binaryExpression(
-        operator[0] as "+" | "-",
-        unaryExpression("+", this.get(member)),
-        numericLiteral(1),
-      );
+      const ref = scope.generateUidIdentifierBasedOnNode(node);
+      scope.push({ id: ref });
+
+      const seq: t.Expression[] = [
+        // ref = _get(MEMBER)
+        assignmentExpression("=", cloneNode(ref), this.get(member)),
+      ];
 
       if (prefix) {
+        seq.push(updateExpression(operator, cloneNode(ref), prefix));
+
+        // (ref = _get(MEMBER), ++ref)
+        const value = sequenceExpression(seq);
         parentPath.replaceWith(this.set(member, value));
+
+        return;
       } else {
-        const { scope } = member;
-        const ref = scope.generateUidIdentifierBasedOnNode(node);
-        scope.push({ id: ref });
+        const ref2 = scope.generateUidIdentifierBasedOnNode(node);
+        scope.push({ id: ref2 });
 
-        value.left = assignmentExpression(
-          "=",
+        seq.push(
+          assignmentExpression(
+            "=",
+            cloneNode(ref2),
+            updateExpression(operator, cloneNode(ref), prefix),
+          ),
           cloneNode(ref),
-          // @ts-expect-error todo(flow->ts) value.left is possibly PrivateName, which is not usable here
-          value.left,
         );
 
+        // (ref = _get(MEMBER), ref2 = ref++, ref)
+        const value = sequenceExpression(seq);
         parentPath.replaceWith(
-          sequenceExpression([this.set(member, value), cloneNode(ref)]),
+          sequenceExpression([this.set(member, value), cloneNode(ref2)]),
         );
+
+        return;
       }
-      return;
     }
 
     // MEMBER = VALUE   ->   _set(MEMBER, VALUE)
     // MEMBER += VALUE   ->   _set(MEMBER, _get(MEMBER) + VALUE)
     // MEMBER ??= VALUE   ->   _get(MEMBER) ?? _set(MEMBER, VALUE)
     if (parentPath.isAssignmentExpression({ left: node })) {
-      if (this.simpleSet) {
-        member.replaceWith(this.simpleSet(member));
-        return;
-      }
-
-      const { operator, right: value } = parentPath.node;
-
-      if (operator === "=") {
-        parentPath.replaceWith(this.set(member, value));
-      } else {
-        const operatorTrunc = operator.slice(0, -1);
-        if (LOGICAL_OPERATORS.includes(operatorTrunc)) {
-          // Give the state handler a chance to memoise the member, since we'll
-          // reference it twice. The first access (the get) should do the memo
-          // assignment.
-          this.memoise(member, 1);
-          parentPath.replaceWith(
-            logicalExpression(
-              operatorTrunc as t.LogicalExpression["operator"],
-              this.get(member),
-              this.set(member, value),
-            ),
-          );
-        } else {
-          // Here, the second access (the set) is evaluated first.
-          this.memoise(member, 2);
-          parentPath.replaceWith(
-            this.set(
-              member,
-              binaryExpression(
-                operatorTrunc as t.BinaryExpression["operator"],
-                this.get(member),
-                value,
-              ),
-            ),
-          );
-        }
-      }
+      handleAssignment(this, member, parentPath);
       return;
     }
 
@@ -447,7 +446,7 @@ const handle = {
     if (parentPath.isOptionalCallExpression({ callee: node })) {
       // Replace `function (a, x = a.b.#c?.()) {}` to `function (a, x = (() => a.b.#c?.())() ){}`
       // so the temporary variable can be injected in correct scope
-      // This can be further optimized to avoid unecessary IIFE
+      // This can be further optimized to avoid unnecessary IIFE
       if (scope.path.isPattern()) {
         parentPath.replaceWith(
           // The injected member will be queued and eventually transformed when visited
@@ -458,6 +457,15 @@ const handle = {
       parentPath.replaceWith(
         this.optionalCall(member, parentPath.node.arguments),
       );
+      return;
+    }
+
+    // delete MEMBER -> _delete(MEMBER)
+    if (
+      (process.env.BABEL_8_BREAKING || this.delete) &&
+      parentPath.isUnaryExpression({ operator: "delete" })
+    ) {
+      parentPath.replaceWith(this.delete(member));
       return;
     }
 
@@ -504,6 +512,51 @@ const handle = {
   },
 };
 
+function handleAssignment(
+  state: HandlerState,
+  member: NodePath<t.MemberExpression | t.OptionalMemberExpression>,
+  parentPath: NodePath<t.AssignmentExpression>,
+) {
+  if (state.simpleSet) {
+    member.replaceWith(state.simpleSet(member));
+    return;
+  }
+
+  const { operator, right: value } = parentPath.node;
+
+  if (operator === "=") {
+    parentPath.replaceWith(state.set(member, value));
+  } else {
+    const operatorTrunc = operator.slice(0, -1);
+    if (LOGICAL_OPERATORS.includes(operatorTrunc)) {
+      // Give the state handler a chance to memoise the member, since we'll
+      // reference it twice. The first access (the get) should do the memo
+      // assignment.
+      state.memoise(member, 1);
+      parentPath.replaceWith(
+        logicalExpression(
+          operatorTrunc as t.LogicalExpression["operator"],
+          state.get(member),
+          state.set(member, value),
+        ),
+      );
+    } else {
+      // Here, the second access (the set) is evaluated first.
+      state.memoise(member, 2);
+      parentPath.replaceWith(
+        state.set(
+          member,
+          binaryExpression(
+            operatorTrunc as t.BinaryExpression["operator"],
+            state.get(member),
+            value,
+          ),
+        ),
+      );
+    }
+  }
+}
+
 export interface Handler<State> {
   memoise?(
     this: HandlerState<State> & State,
@@ -532,13 +585,14 @@ export interface Handler<State> {
     member: Member,
     args: t.OptionalCallExpression["arguments"],
   ): t.Expression;
+  delete(this: HandlerState<State> & State, member: Member): t.Expression;
 }
 
-export interface HandlerState<State = {}> extends Handler<State> {
+export interface HandlerState<State = object> extends Handler<State> {
   handle(
     this: HandlerState<State> & State,
     member: Member,
-    noDocumentAll: boolean,
+    noDocumentAll?: boolean,
   ): void;
   memoiser: AssignmentMemoiser;
 }
@@ -550,7 +604,7 @@ export interface HandlerState<State = {}> extends Handler<State> {
 // get, set, and call methods.
 // Optionally, a memoise method may be defined on the state, which will be
 // called when the member is a self-referential update.
-export default function memberExpressionToFunctions<CustomState = {}>(
+export default function memberExpressionToFunctions<CustomState extends object>(
   path: NodePath,
   visitor: Visitor<HandlerState<CustomState>>,
   state: Handler<CustomState> & CustomState,

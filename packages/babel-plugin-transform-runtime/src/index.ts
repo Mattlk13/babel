@@ -2,75 +2,28 @@ import { declare } from "@babel/helper-plugin-utils";
 import { addDefault, isModule } from "@babel/helper-module-imports";
 import { types as t } from "@babel/core";
 
-import { hasMinVersion } from "./helpers";
-import getRuntimePath from "./get-runtime-path";
+import { hasMinVersion } from "./helpers.ts";
+import getRuntimePath, { resolveFSPath } from "./get-runtime-path/index.ts";
 
-import _pluginCorejs2 from "babel-plugin-polyfill-corejs2";
-import _pluginCorejs3 from "babel-plugin-polyfill-corejs3";
-import _pluginRegenerator from "babel-plugin-polyfill-regenerator";
-const pluginCorejs2 = _pluginCorejs2.default || _pluginCorejs2;
-const pluginCorejs3 = _pluginCorejs3.default || _pluginCorejs3;
-const pluginRegenerator = _pluginRegenerator.default || _pluginRegenerator;
+// TODO(Babel 8): Remove this
+import babel7 from "./babel-7/index.cjs";
 
-const pluginsCompat = "#__secret_key__@babel/runtime__compatibility";
-
-function supportsStaticESM(caller) {
-  return !!caller?.supportsStaticESM;
+export interface Options {
+  absoluteRuntime?: boolean;
+  corejs?: string | number | { version: string | number; proposals?: boolean };
+  helpers?: boolean;
+  version?: string;
+  moduleName?: null | string;
 }
 
-export default declare((api, options, dirname) => {
-  api.assertVersion(7);
+export default declare((api, options: Options, dirname) => {
+  api.assertVersion(REQUIRED_VERSION(7));
 
   const {
-    corejs,
-    helpers: useRuntimeHelpers = true,
-    regenerator: useRuntimeRegenerator = true,
-    useESModules = false,
     version: runtimeVersion = "7.0.0-beta.0",
     absoluteRuntime = false,
+    moduleName = null,
   } = options;
-
-  let proposals = false;
-  let rawVersion;
-
-  if (typeof corejs === "object" && corejs !== null) {
-    rawVersion = corejs.version;
-    proposals = Boolean(corejs.proposals);
-  } else {
-    rawVersion = corejs;
-  }
-
-  const corejsVersion = rawVersion ? Number(rawVersion) : false;
-
-  if (![false, 2, 3].includes(corejsVersion)) {
-    throw new Error(
-      `The \`core-js\` version must be false, 2 or 3, but got ${JSON.stringify(
-        rawVersion,
-      )}.`,
-    );
-  }
-
-  if (proposals && (!corejsVersion || corejsVersion < 3)) {
-    throw new Error(
-      "The 'proposals' option is only supported when using 'corejs: 3'",
-    );
-  }
-
-  if (typeof useRuntimeRegenerator !== "boolean") {
-    throw new Error(
-      "The 'regenerator' option must be undefined, or a boolean.",
-    );
-  }
-
-  if (typeof useRuntimeHelpers !== "boolean") {
-    throw new Error("The 'helpers' option must be undefined, or a boolean.");
-  }
-
-  if (typeof useESModules !== "boolean" && useESModules !== "auto") {
-    throw new Error(
-      "The 'useESModules' option must be undefined, or a boolean, or 'auto'.",
-    );
-  }
 
   if (
     typeof absoluteRuntime !== "boolean" &&
@@ -85,19 +38,22 @@ export default declare((api, options, dirname) => {
     throw new Error(`The 'version' option must be a version string.`);
   }
 
-  // In recent @babel/runtime versions, we can use require("helper").default
-  // instead of require("helper") so that it has the same interface as the
-  // ESM helper, and bundlers can better exchange one format for the other.
-  // TODO(Babel 8): Remove this check, it's always true
-  const DUAL_MODE_RUNTIME = "7.13.0";
-  const supportsCJSDefault = hasMinVersion(DUAL_MODE_RUNTIME, runtimeVersion);
-
-  function has(obj, key) {
-    return Object.prototype.hasOwnProperty.call(obj, key);
+  if (moduleName !== null && typeof moduleName !== "string") {
+    throw new Error("The 'moduleName' option must be null or a string.");
   }
 
-  if (has(options, "useBuiltIns")) {
-    if (options.useBuiltIns) {
+  if (!process.env.BABEL_8_BREAKING) {
+    // In recent @babel/runtime versions, we can use require("helper").default
+    // instead of require("helper") so that it has the same interface as the
+    // ESM helper, and bundlers can better exchange one format for the other.
+    const DUAL_MODE_RUNTIME = "7.13.0";
+    // eslint-disable-next-line no-var
+    var supportsCJSDefault = hasMinVersion(DUAL_MODE_RUNTIME, runtimeVersion);
+  }
+
+  if (Object.hasOwn(options, "useBuiltIns")) {
+    // @ts-expect-error deprecated options
+    if (options["useBuiltIns"]) {
       throw new Error(
         "The 'useBuiltIns' option has been removed. The @babel/runtime " +
           "module now uses builtins by default.",
@@ -110,8 +66,9 @@ export default declare((api, options, dirname) => {
     }
   }
 
-  if (has(options, "polyfill")) {
-    if (options.polyfill === false) {
+  if (Object.hasOwn(options, "polyfill")) {
+    // @ts-expect-error deprecated options
+    if (options["polyfill"] === false) {
       throw new Error(
         "The 'polyfill' option has been removed. The @babel/runtime " +
           "module now skips polyfilling by default.",
@@ -124,128 +81,134 @@ export default declare((api, options, dirname) => {
     }
   }
 
-  if (has(options, "moduleName")) {
-    throw new Error(
-      "The 'moduleName' option has been removed. @babel/transform-runtime " +
-        "no longer supports arbitrary runtimes. If you were using this to " +
-        "set an absolute path for Babel's standard runtimes, please use the " +
-        "'absoluteRuntime' option.",
-    );
+  if (process.env.BABEL_8_BREAKING) {
+    if (Object.hasOwn(options, "regenerator")) {
+      throw new Error(
+        "The 'regenerator' option has been removed. The generators transform " +
+          "no longers relies on a 'regeneratorRuntime' global. " +
+          "If you still need to replace imports to the 'regeneratorRuntime' " +
+          "global, you can use babel-plugin-polyfill-regenerator.",
+      );
+    }
   }
 
-  const esModules =
-    useESModules === "auto" ? api.caller(supportsStaticESM) : useESModules;
+  if (process.env.BABEL_8_BREAKING) {
+    if (Object.hasOwn(options, "useESModules")) {
+      throw new Error(
+        "The 'useESModules' option has been removed. @babel/runtime now uses " +
+          "package.json#exports to support both CommonJS and ESM helpers.",
+      );
+    }
+  } else {
+    // @ts-expect-error(Babel 7 vs Babel 8)
+    const { useESModules = false } = options;
+    if (typeof useESModules !== "boolean" && useESModules !== "auto") {
+      throw new Error(
+        "The 'useESModules' option must be undefined, or a boolean, or 'auto'.",
+      );
+    }
 
-  const injectCoreJS2 = corejsVersion === 2;
-  const injectCoreJS3 = corejsVersion === 3;
-
-  const moduleName = injectCoreJS3
-    ? "@babel/runtime-corejs3"
-    : injectCoreJS2
-    ? "@babel/runtime-corejs2"
-    : "@babel/runtime";
-
-  const HEADER_HELPERS = ["interopRequireWildcard", "interopRequireDefault"];
-
-  const modulePath = getRuntimePath(moduleName, dirname, absoluteRuntime);
-
-  function createCorejsPlgin(plugin, options, regeneratorPlugin) {
-    return (api, _, filename) => {
-      return {
-        ...plugin(api, options, filename),
-        inherits: regeneratorPlugin,
-      };
-    };
+    // eslint-disable-next-line no-var
+    var esModules =
+      useESModules === "auto"
+        ? api.caller(
+            // @ts-expect-error CallerMetadata does not define supportsStaticESM
+            caller => !!caller?.supportsStaticESM,
+          )
+        : useESModules;
   }
 
-  function createRegeneratorPlugin(options) {
-    if (!useRuntimeRegenerator) return undefined;
-    return (api, _, filename) => {
-      return pluginRegenerator(api, options, filename);
-    };
+  if (process.env.BABEL_8_BREAKING) {
+    if (Object.hasOwn(options, "helpers")) {
+      throw new Error(
+        "The 'helpers' option has been removed. " +
+          "Remove the plugin from your config if " +
+          "you want to disable helpers import injection.",
+      );
+    }
+  } else {
+    // eslint-disable-next-line no-var
+    var { helpers: useRuntimeHelpers = true } = options;
+
+    if (typeof useRuntimeHelpers !== "boolean") {
+      throw new Error("The 'helpers' option must be undefined, or a boolean.");
+    }
   }
 
-  const corejsExt = absoluteRuntime ? ".js" : "";
+  const HEADER_HELPERS = new Set([
+    "interopRequireWildcard",
+    "interopRequireDefault",
+  ]);
 
   return {
     name: "transform-runtime",
 
-    inherits: injectCoreJS2
-      ? createCorejsPlgin(
-          pluginCorejs2,
-          {
-            method: "usage-pure",
-            [pluginsCompat]: {
-              runtimeVersion,
-              useBabelRuntime: modulePath,
-              ext: corejsExt,
-            },
-          },
-          createRegeneratorPlugin({
-            method: "usage-pure",
-            [pluginsCompat]: { useBabelRuntime: modulePath },
-          }),
-        )
-      : injectCoreJS3
-      ? createCorejsPlgin(
-          pluginCorejs3,
-          {
-            method: "usage-pure",
-            version: 3,
-            proposals,
-            [pluginsCompat]: { useBabelRuntime: modulePath, ext: corejsExt },
-          },
-          createRegeneratorPlugin({
-            method: "usage-pure",
-            [pluginsCompat]: { useBabelRuntime: modulePath },
-          }),
-        )
-      : createRegeneratorPlugin({
-          method: "usage-pure",
-          [pluginsCompat]: { useBabelRuntime: modulePath },
-        }),
+    inherits: process.env.BABEL_8_BREAKING
+      ? undefined
+      : babel7.createPolyfillPlugins(options, runtimeVersion, absoluteRuntime),
 
     pre(file) {
-      if (!useRuntimeHelpers) return;
+      if (!process.env.BABEL_8_BREAKING && !useRuntimeHelpers) return;
 
-      file.set("helperGenerator", name => {
+      let modulePath: string;
+
+      file.set("helperGenerator", (name: string) => {
+        modulePath ??= getRuntimePath(
+          moduleName ??
+            file.get("runtimeHelpersModuleName") ??
+            "@babel/runtime",
+          dirname,
+          absoluteRuntime,
+        );
+
         // If the helper didn't exist yet at the version given, we bail
         // out and let Babel either insert it directly, or throw an error
         // so that plugins can handle that case properly.
-        if (
-          file.availableHelper &&
-          !file.availableHelper(name, runtimeVersion)
-        ) {
-          return;
+        if (!process.env.BABEL_8_BREAKING) {
+          if (!file.availableHelper?.(name, runtimeVersion)) {
+            if (name === "regeneratorRuntime") {
+              // For regeneratorRuntime, we can fallback to the old behavior of
+              // relying on the regeneratorRuntime global. If the 'regenerator'
+              // option is not disabled, babel-plugin-polyfill-regenerator will
+              // then replace it with a @babel/helpers/regenerator import.
+              //
+              // We must wrap it in a function, because built-in Babel helpers
+              // are functions.
+              return t.arrowFunctionExpression(
+                [],
+                t.identifier("regeneratorRuntime"),
+              );
+            }
+            return;
+          }
+        } else {
+          if (!file.availableHelper(name, runtimeVersion)) return;
         }
-
-        const isInteropHelper = HEADER_HELPERS.indexOf(name) !== -1;
 
         // Explicitly set the CommonJS interop helpers to their reserve
         // blockHoist of 4 so they are guaranteed to exist
         // when other things used them to import.
         const blockHoist =
-          isInteropHelper && !isModule(file.path) ? 4 : undefined;
+          HEADER_HELPERS.has(name) && !isModule(file.path) ? 4 : undefined;
 
-        const helpersDir =
-          esModules && file.path.node.sourceType === "module"
-            ? "helpers/esm"
-            : "helpers";
+        let helperPath = `${modulePath}/helpers/${
+          !process.env.BABEL_8_BREAKING &&
+          esModules &&
+          file.path.node.sourceType === "module"
+            ? "esm/" + name
+            : name
+        }`;
+        if (absoluteRuntime) helperPath = resolveFSPath(helperPath);
 
-        return addDefaultImport(
-          `${modulePath}/${helpersDir}/${name}`,
-          name,
-          blockHoist,
-          true,
-        );
+        return addDefaultImport(helperPath, name, blockHoist, true);
       });
 
       const cache = new Map();
 
       function addDefaultImport(
-        source,
-        nameHint,
-        blockHoist,
+        source: string,
+        nameHint: string,
+        blockHoist: number,
         isHelper = false,
       ) {
         // If something on the page adds a helper when the file is an ES6
@@ -259,8 +222,13 @@ export default declare((api, options, dirname) => {
           cached = t.cloneNode(cached);
         } else {
           cached = addDefault(file.path, source, {
-            importedInterop:
-              isHelper && supportsCJSDefault ? "compiled" : "uncompiled",
+            importedInterop: (
+              process.env.BABEL_8_BREAKING
+                ? isHelper
+                : isHelper && supportsCJSDefault
+            )
+              ? "compiled"
+              : "uncompiled",
             nameHint,
             blockHoist,
           });

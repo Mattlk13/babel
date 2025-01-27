@@ -1,9 +1,13 @@
-import { merge, validate } from "./options";
-import type { TemplateOpts, PublicOpts, PublicReplacements } from "./options";
-import type { Formatter } from "./formatters";
+import { merge, validate } from "./options.ts";
+import type {
+  TemplateOpts,
+  PublicOpts,
+  PublicReplacements,
+} from "./options.ts";
+import type { Formatter } from "./formatters.ts";
 
-import stringTemplate from "./string";
-import literalTemplate from "./literal";
+import stringTemplate from "./string.ts";
+import literalTemplate from "./literal.ts";
 
 export type TemplateBuilder<T> = {
   // Build a new builder, merging the given options with the previous ones.
@@ -13,15 +17,16 @@ export type TemplateBuilder<T> = {
   (tpl: string, opts?: PublicOpts): (replacements?: PublicReplacements) => T;
 
   // Building from a template literal produces an AST builder function by default.
-  (tpl: TemplateStringsArray, ...args: Array<any>): (
-    replacements?: PublicReplacements,
-  ) => T;
+  (
+    tpl: TemplateStringsArray,
+    ...args: Array<unknown>
+  ): (replacements?: PublicReplacements) => T;
 
   // Allow users to explicitly create templates that produce ASTs, skipping
   // the need for an intermediate function.
   ast: {
     (tpl: string, opts?: PublicOpts): T;
-    (tpl: TemplateStringsArray, ...args: Array<any>): T;
+    (tpl: TemplateStringsArray, ...args: Array<unknown>): T;
   };
 };
 
@@ -66,7 +71,7 @@ export default function createTemplateBuilder<T>(
       throw new Error(`Unexpected template param ${typeof tpl}`);
     }) as TemplateBuilder<T>,
     {
-      ast: (tpl, ...args) => {
+      ast: (tpl: string | Array<string>, ...args: Array<unknown>) => {
         if (typeof tpl === "string") {
           if (args.length > 1) throw new Error("Unexpected extra params.");
           return stringTemplate(

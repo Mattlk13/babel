@@ -1,7 +1,6 @@
 "use strict";
 
 var _obj;
-
 const Base = {};
 let value = 2;
 const obj = _obj = {
@@ -9,11 +8,9 @@ const obj = _obj = {
     expect(this).toBe(obj);
     value = v;
   },
-
   set() {
-    return babelHelpers.set(babelHelpers.getPrototypeOf(_obj), "test", 3, this, true);
+    return babelHelpers.superPropSet(_obj, "test", 3, this, 1);
   }
-
 };
 Object.setPrototypeOf(obj, Base);
 expect(obj.set()).toBe(3);

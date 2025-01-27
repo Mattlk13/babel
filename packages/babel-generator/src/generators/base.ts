@@ -1,54 +1,55 @@
-import type Printer from "../printer";
+import type Printer from "../printer.ts";
 import type * as t from "@babel/types";
-import * as charCodes from "charcodes";
 
 export function File(this: Printer, node: t.File) {
   if (node.program) {
     // Print this here to ensure that Program node 'leadingComments' still
     // get printed after the hashbang.
-    this.print(node.program.interpreter, node);
+    this.print(node.program.interpreter);
   }
 
-  this.print(node.program, node);
+  this.print(node.program);
 }
 
 export function Program(this: Printer, node: t.Program) {
-  this.printInnerComments(node, false);
+  // An empty Program doesn't have any inner tokens, so
+  // we must explicitly print its inner comments.
+  this.noIndentInnerCommentsHere();
+  this.printInnerComments();
 
-  this.printSequence(node.directives, node);
-  if (node.directives && node.directives.length) this.newline();
+  const directivesLen = node.directives?.length;
+  if (directivesLen) {
+    const newline = node.body.length ? 2 : 1;
+    this.printSequence(node.directives, undefined, newline);
+    if (!node.directives[directivesLen - 1].trailingComments?.length) {
+      this.newline(newline);
+    }
+  }
 
-  this.printSequence(node.body, node);
+  this.printSequence(node.body);
 }
 
 export function BlockStatement(this: Printer, node: t.BlockStatement) {
   this.token("{");
-  this.printInnerComments(node);
+  const exit = this.enterDelimited();
 
-  const hasDirectives = node.directives?.length;
-
-  if (node.body.length || hasDirectives) {
-    this.newline();
-
-    this.printSequence(node.directives, node, { indent: true });
-    if (hasDirectives) this.newline();
-
-    this.printSequence(node.body, node, { indent: true });
-    this.removeTrailingNewline();
-
-    this.source("end", node.loc);
-
-    if (!this.endsWith(charCodes.lineFeed)) this.newline();
-
-    this.rightBrace();
-  } else {
-    this.source("end", node.loc);
-    this.token("}");
+  const directivesLen = node.directives?.length;
+  if (directivesLen) {
+    const newline = node.body.length ? 2 : 1;
+    this.printSequence(node.directives, true, newline);
+    if (!node.directives[directivesLen - 1].trailingComments?.length) {
+      this.newline(newline);
+    }
   }
+
+  this.printSequence(node.body, true);
+
+  exit();
+  this.rightBrace(node);
 }
 
 export function Directive(this: Printer, node: t.Directive) {
-  this.print(node.value, node);
+  this.print(node.value);
   this.semicolon();
 }
 
@@ -58,7 +59,7 @@ const unescapedDoubleQuoteRE = /(?:^|[^\\])(?:\\\\)*"/;
 
 export function DirectiveLiteral(this: Printer, node: t.DirectiveLiteral) {
   const raw = this.getPossibleRaw(node);
-  if (raw != null) {
+  if (!this.format.minified && raw !== undefined) {
     this.token(raw);
     return;
   }
@@ -67,7 +68,7 @@ export function DirectiveLiteral(this: Printer, node: t.DirectiveLiteral) {
 
   // NOTE: In directives we can't change escapings,
   // because they change the behavior.
-  // e.g. "us\x65 string" (\x65 is e) is not a "use strict" directive.
+  // e.g. "us\x65 strict" (\x65 is e) is not a "use strict" directive.
 
   if (!unescapedDoubleQuoteRE.test(value)) {
     this.token(`"${value}"`);
@@ -85,7 +86,8 @@ export function InterpreterDirective(
   this: Printer,
   node: t.InterpreterDirective,
 ) {
-  this.token(`#!${node.value}\n`);
+  this.token(`#!${node.value}`);
+  this.newline(1, true);
 }
 
 export function Placeholder(this: Printer, node: t.Placeholder) {

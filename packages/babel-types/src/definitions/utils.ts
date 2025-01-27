@@ -1,15 +1,17 @@
-import is from "../validators/is";
-import { validateField, validateChild } from "../validators/validate";
+import is from "../validators/is.ts";
+import { validateField, validateChild } from "../validators/validate.ts";
+import type * as t from "../index.ts";
 
 export const VISITOR_KEYS: Record<string, string[]> = {};
-export const ALIAS_KEYS: Record<string, string[]> = {};
-export const FLIPPED_ALIAS_KEYS: Record<string, string[]> = {};
-export const NODE_FIELDS: Record<string, {}> = {};
+export const ALIAS_KEYS: Partial<Record<NodeTypesWithoutComment, string[]>> =
+  {};
+export const FLIPPED_ALIAS_KEYS: Record<string, NodeTypesWithoutComment[]> = {};
+export const NODE_FIELDS: Record<string, FieldDefinitions> = {};
 export const BUILDER_KEYS: Record<string, string[]> = {};
-export const DEPRECATED_KEYS: Record<string, string> = {};
-export const NODE_PARENT_VALIDATIONS = {};
+export const DEPRECATED_KEYS: Record<string, NodeTypesWithoutComment> = {};
+export const NODE_PARENT_VALIDATIONS: Record<string, Validator> = {};
 
-function getType(val) {
+function getType(val: any) {
   if (Array.isArray(val)) {
     return "array";
   } else if (val === null) {
@@ -19,22 +21,42 @@ function getType(val) {
   }
 }
 
-type Validator = (
-  | { type: string }
+type NodeTypesWithoutComment = t.Node["type"] | keyof t.Aliases;
+
+type NodeTypes = NodeTypesWithoutComment | t.Comment["type"];
+
+type PrimitiveTypes = ReturnType<typeof getType>;
+
+type FieldDefinitions = {
+  [x: string]: FieldOptions;
+};
+
+type DefineTypeOpts = {
+  fields?: FieldDefinitions;
+  visitor?: Array<string>;
+  aliases?: Array<string>;
+  builder?: Array<string>;
+  inherits?: NodeTypes;
+  deprecatedAlias?: string;
+  validate?: Validator;
+};
+
+export type Validator = (
+  | { type: PrimitiveTypes }
   | { each: Validator }
   | { chainOf: Validator[] }
   | { oneOf: any[] }
-  | { oneOfNodeTypes: string[] }
-  | { oneOfNodeOrValueTypes: string[] }
+  | { oneOfNodeTypes: NodeTypes[] }
+  | { oneOfNodeOrValueTypes: (NodeTypes | PrimitiveTypes)[] }
   | { shapeOf: { [x: string]: FieldOptions } }
-  | {}
+  | object
 ) &
-  // TODO: Import and use Node instead of any
-  ((parent: any, key: string, node: any) => void);
+  ((node: t.Node, key: string, val: any) => void);
 
-type FieldOptions = {
-  default?: any;
+export type FieldOptions = {
+  default?: string | number | boolean | [];
   optional?: boolean;
+  deprecated?: boolean;
   validate?: Validator;
 };
 
@@ -42,47 +64,43 @@ export function validate(validate: Validator): FieldOptions {
   return { validate };
 }
 
-export function typeIs(typeName: string | string[]) {
-  return typeof typeName === "string"
-    ? assertNodeType(typeName)
-    : assertNodeType(...typeName);
-}
-
-export function validateType(typeName: string | string[]) {
-  return validate(typeIs(typeName));
+export function validateType(...typeNames: NodeTypes[]) {
+  return validate(assertNodeType(...typeNames));
 }
 
 export function validateOptional(validate: Validator): FieldOptions {
   return { validate, optional: true };
 }
 
-export function validateOptionalType(
-  typeName: string | string[],
-): FieldOptions {
-  return { validate: typeIs(typeName), optional: true };
+export function validateOptionalType(...typeNames: NodeTypes[]): FieldOptions {
+  return { validate: assertNodeType(...typeNames), optional: true };
 }
 
 export function arrayOf(elementType: Validator): Validator {
   return chain(assertValueType("array"), assertEach(elementType));
 }
 
-export function arrayOfType(typeName: string | string[]) {
-  return arrayOf(typeIs(typeName));
+export function arrayOfType(...typeNames: NodeTypes[]) {
+  return arrayOf(assertNodeType(...typeNames));
 }
 
-export function validateArrayOfType(typeName: string | string[]) {
-  return validate(arrayOfType(typeName));
+export function validateArrayOfType(...typeNames: NodeTypes[]) {
+  return validate(arrayOfType(...typeNames));
 }
 
 export function assertEach(callback: Validator): Validator {
-  function validator(node, key, val) {
+  const childValidator = process.env.BABEL_TYPES_8_BREAKING
+    ? validateChild
+    : () => {};
+
+  function validator(node: t.Node, key: string, val: any) {
     if (!Array.isArray(val)) return;
 
     for (let i = 0; i < val.length; i++) {
       const subkey = `${key}[${i}]`;
       const v = val[i];
       callback(node, subkey, v);
-      if (process.env.BABEL_TYPES_8_BREAKING) validateChild(node, subkey, v);
+      childValidator(node, subkey, v);
     }
   }
   validator.each = callback;
@@ -91,7 +109,7 @@ export function assertEach(callback: Validator): Validator {
 
 export function assertOneOf(...values: Array<any>): Validator {
   function validate(node: any, key: string, val: any) {
-    if (values.indexOf(val) < 0) {
+    if (!values.includes(val)) {
       throw new TypeError(
         `Property ${key} expected value to be one of ${JSON.stringify(
           values,
@@ -105,8 +123,8 @@ export function assertOneOf(...values: Array<any>): Validator {
   return validate;
 }
 
-export function assertNodeType(...types: Array<string>): Validator {
-  function validate(node, key, val) {
+export function assertNodeType(...types: NodeTypes[]): Validator {
+  function validate(node: t.Node, key: string, val: any) {
     for (const type of types) {
       if (is(type, val)) {
         validateChild(node, key, val);
@@ -128,8 +146,10 @@ export function assertNodeType(...types: Array<string>): Validator {
   return validate;
 }
 
-export function assertNodeOrValueType(...types: Array<string>): Validator {
-  function validate(node, key, val) {
+export function assertNodeOrValueType(
+  ...types: (NodeTypes | PrimitiveTypes)[]
+): Validator {
+  function validate(node: t.Node, key: string, val: any) {
     for (const type of types) {
       if (getType(val) === type || is(type, val)) {
         validateChild(node, key, val);
@@ -151,8 +171,8 @@ export function assertNodeOrValueType(...types: Array<string>): Validator {
   return validate;
 }
 
-export function assertValueType(type: string): Validator {
-  function validate(node, key, val) {
+export function assertValueType(type: PrimitiveTypes): Validator {
+  function validate(node: t.Node, key: string, val: any) {
     const valid = getType(val) === type;
 
     if (!valid) {
@@ -168,7 +188,7 @@ export function assertValueType(type: string): Validator {
 }
 
 export function assertShape(shape: { [x: string]: FieldOptions }): Validator {
-  function validate(node, key, val) {
+  function validate(node: t.Node, key: string, val: any) {
     const errors = [];
     for (const property of Object.keys(shape)) {
       try {
@@ -196,7 +216,7 @@ export function assertShape(shape: { [x: string]: FieldOptions }): Validator {
 }
 
 export function assertOptionalChainStart(): Validator {
-  function validate(node) {
+  function validate(node: t.Node) {
     let current = node;
     while (node) {
       const { type } = current;
@@ -245,7 +265,7 @@ export function chain(...fns: Array<Validator>): Validator {
   return validate;
 }
 
-const validTypeOpts = [
+const validTypeOpts = new Set([
   "aliases",
   "builder",
   "deprecatedAlias",
@@ -253,23 +273,32 @@ const validTypeOpts = [
   "inherits",
   "visitor",
   "validate",
-];
-const validFieldKeys = ["default", "optional", "validate"];
+]);
+const validFieldKeys = new Set([
+  "default",
+  "optional",
+  "deprecated",
+  "validate",
+]);
 
-export default function defineType(
-  type: string,
-  opts: {
-    fields?: {
-      [x: string]: FieldOptions;
-    };
-    visitor?: Array<string>;
-    aliases?: Array<string>;
-    builder?: Array<string>;
-    inherits?: string;
-    deprecatedAlias?: string;
-    validate?: Validator;
-  } = {},
-) {
+const store = {} as Record<string, DefineTypeOpts>;
+
+// Wraps defineType to ensure these aliases are included.
+export function defineAliasedType(...aliases: string[]) {
+  return (type: string, opts: DefineTypeOpts = {}) => {
+    let defined = opts.aliases;
+    if (!defined) {
+      if (opts.inherits) defined = store[opts.inherits].aliases?.slice();
+      defined ??= [];
+      opts.aliases = defined;
+    }
+    const additional = aliases.filter(a => !defined.includes(a));
+    defined.unshift(...additional);
+    defineType(type, opts);
+  };
+}
+
+export default function defineType(type: string, opts: DefineTypeOpts = {}) {
   const inherits = (opts.inherits && store[opts.inherits]) || {};
 
   let fields = opts.fields;
@@ -290,6 +319,7 @@ export default function defineType(
         fields[key] = {
           default: Array.isArray(def) ? [] : def,
           optional: field.optional,
+          deprecated: field.deprecated,
           validate: field.validate,
         };
       }
@@ -302,13 +332,13 @@ export default function defineType(
     opts.builder || inherits.builder || opts.visitor || [];
 
   for (const k of Object.keys(opts)) {
-    if (validTypeOpts.indexOf(k) === -1) {
+    if (!validTypeOpts.has(k)) {
       throw new Error(`Unknown type option "${k}" on ${type}`);
     }
   }
 
   if (opts.deprecatedAlias) {
-    DEPRECATED_KEYS[opts.deprecatedAlias] = type;
+    DEPRECATED_KEYS[opts.deprecatedAlias] = type as NodeTypesWithoutComment;
   }
 
   // ensure all field keys are represented in `fields`
@@ -319,7 +349,7 @@ export default function defineType(
   for (const key of Object.keys(fields)) {
     const field = fields[key];
 
-    if (field.default !== undefined && builder.indexOf(key) === -1) {
+    if (field.default !== undefined && !builder.includes(key)) {
       field.optional = true;
     }
     if (field.default === undefined) {
@@ -329,7 +359,7 @@ export default function defineType(
     }
 
     for (const k of Object.keys(field)) {
-      if (validFieldKeys.indexOf(k) === -1) {
+      if (!validFieldKeys.has(k)) {
         throw new Error(`Unknown field key "${k}" on ${type}.${key}`);
       }
     }
@@ -338,10 +368,10 @@ export default function defineType(
   VISITOR_KEYS[type] = opts.visitor = visitor;
   BUILDER_KEYS[type] = opts.builder = builder;
   NODE_FIELDS[type] = opts.fields = fields;
-  ALIAS_KEYS[type] = opts.aliases = aliases;
+  ALIAS_KEYS[type as NodeTypesWithoutComment] = opts.aliases = aliases;
   aliases.forEach(alias => {
     FLIPPED_ALIAS_KEYS[alias] = FLIPPED_ALIAS_KEYS[alias] || [];
-    FLIPPED_ALIAS_KEYS[alias].push(type);
+    FLIPPED_ALIAS_KEYS[alias].push(type as NodeTypesWithoutComment);
   });
 
   if (opts.validate) {
@@ -350,5 +380,3 @@ export default function defineType(
 
   store[type] = opts;
 }
-
-const store = {};

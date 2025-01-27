@@ -1,7 +1,7 @@
 const { min } = Math;
 
 // a minimal leven distance implementation
-// balanced maintenability with code size
+// balanced maintainability with code size
 // It is not blazingly fast but should be okay for Babel user case
 // where it will be run for at most tens of time on strings
 // that have less than 20 ASCII characters
@@ -9,7 +9,7 @@ const { min } = Math;
 // https://rosettacode.org/wiki/Levenshtein_distance#ES5
 function levenshtein(a: string, b: string): number {
   let t = [],
-    u = [],
+    u: number[] = [],
     i,
     j;
   const m = a.length,

@@ -1,21 +1,24 @@
 // This file contains methods responsible for maintaining a TraversalContext.
 
-import traverse from "../index";
-import { SHOULD_SKIP, SHOULD_STOP } from "./index";
-import type TraversalContext from "../context";
-import type NodePath from "./index";
+import { traverseNode } from "../traverse-node.ts";
+import { SHOULD_SKIP, SHOULD_STOP } from "./index.ts";
+import { _markRemoved } from "./removal.ts";
+import type TraversalContext from "../context.ts";
+import type { VisitPhase } from "../types.ts";
+import type NodePath from "./index.ts";
+import * as t from "@babel/types";
 
-export function call(this: NodePath, key: string): boolean {
+export function call(this: NodePath, key: VisitPhase): boolean {
   const opts = this.opts;
 
   this.debug(key);
 
   if (this.node) {
-    if (this._call(opts[key])) return true;
+    if (_call.call(this, opts[key])) return true;
   }
 
   if (this.node) {
-    return this._call(opts[this.node.type] && opts[this.node.type][key]);
+    return _call.call(this, opts[this.node.type]?.[key]);
   }
 
   return false;
@@ -54,12 +57,15 @@ export function _call(this: NodePath, fns?: Array<Function>): boolean {
 }
 
 export function isDenylisted(this: NodePath): boolean {
+  // @ts-expect-error TODO(Babel 8): Remove blacklist
   const denylist = this.opts.denylist ?? this.opts.blacklist;
-  return denylist && denylist.indexOf(this.node.type) > -1;
+  return denylist?.includes(this.node.type);
 }
 
-// TODO: Remove in Babel 8
-export { isDenylisted as isBlacklisted };
+if (!process.env.BABEL_8_BREAKING && !USE_ESM) {
+  // eslint-disable-next-line no-restricted-globals
+  exports.isBlacklisted = isDenylisted;
+}
 
 function restoreContext(path: NodePath, context: TraversalContext) {
   if (path.context !== context) {
@@ -78,7 +84,7 @@ export function visit(this: NodePath): boolean {
     return false;
   }
 
-  if (this.opts.shouldSkip && this.opts.shouldSkip(this)) {
+  if (this.opts.shouldSkip?.(this)) {
     return false;
   }
 
@@ -88,14 +94,14 @@ export function visit(this: NodePath): boolean {
   // before calling the enter visitor, but it can be true in case of
   // a requeued node (e.g. by .replaceWith()) that is then marked
   // with .skip().
-  if (this.shouldSkip || this.call("enter")) {
+  if (this.shouldSkip || call.call(this, "enter")) {
     this.debug("Skip...");
     return this.shouldStop;
   }
   restoreContext(this, currentContext);
 
   this.debug("Recursing into...");
-  traverse.node(
+  this.shouldStop = traverseNode(
     this.node,
     this.opts,
     this.scope,
@@ -106,7 +112,7 @@ export function visit(this: NodePath): boolean {
 
   restoreContext(this, currentContext);
 
-  this.call("exit");
+  call.call(this, "exit");
 
   return this.shouldStop;
 }
@@ -128,26 +134,36 @@ export function stop(this: NodePath) {
 }
 
 export function setScope(this: NodePath) {
-  if (this.opts && this.opts.noScope) return;
+  if (this.opts?.noScope) return;
 
   let path = this.parentPath;
 
-  // Skip method scope if is computed method key
-  if (this.key === "key" && path.isMethod()) path = path.parentPath;
+  if (
+    // Skip method scope if is computed method key or decorator expression
+    ((this.key === "key" || this.listKey === "decorators") &&
+      path.isMethod()) ||
+    // Skip switch scope if for discriminant (`x` in `switch (x) {}`).
+    (this.key === "discriminant" && path.isSwitchStatement())
+  ) {
+    path = path.parentPath;
+  }
 
   let target;
   while (path && !target) {
-    if (path.opts && path.opts.noScope) return;
+    if (path.opts?.noScope) return;
 
     target = path.scope;
     path = path.parentPath;
   }
 
   this.scope = this.getScope(target);
-  if (this.scope) this.scope.init();
+  this.scope?.init();
 }
 
-export function setContext(this: NodePath, context?: TraversalContext) {
+export function setContext<S = unknown>(
+  this: NodePath,
+  context?: TraversalContext<S>,
+) {
   if (this.skipKeys != null) {
     this.skipKeys = {};
   }
@@ -157,10 +173,11 @@ export function setContext(this: NodePath, context?: TraversalContext) {
   if (context) {
     this.context = context;
     this.state = context.state;
-    this.opts = context.opts;
+    // Discard the S type parameter from context.opts
+    this.opts = context.opts as typeof this.opts;
   }
 
-  this.setScope();
+  setScope.call(this);
 
   return this;
 }
@@ -174,9 +191,9 @@ export function setContext(this: NodePath, context?: TraversalContext) {
 export function resync(this: NodePath) {
   if (this.removed) return;
 
-  this._resyncParent();
-  this._resyncList();
-  this._resyncKey();
+  _resyncParent.call(this);
+  _resyncList.call(this);
+  _resyncKey.call(this);
   //this._resyncRemoved();
 }
 
@@ -189,7 +206,13 @@ export function _resyncParent(this: NodePath) {
 export function _resyncKey(this: NodePath) {
   if (!this.container) return;
 
-  if (this.node === this.container[this.key]) return;
+  if (
+    this.node ===
+    // @ts-expect-error this.key should present in this.container
+    this.container[this.key]
+  ) {
+    return;
+  }
 
   // grrr, path key is out of sync. this is likely due to a modification to the AST
   // not done through our path APIs
@@ -197,13 +220,16 @@ export function _resyncKey(this: NodePath) {
   if (Array.isArray(this.container)) {
     for (let i = 0; i < this.container.length; i++) {
       if (this.container[i] === this.node) {
-        return this.setKey(i);
+        setKey.call(this, i);
+        return;
       }
     }
   } else {
     for (const key of Object.keys(this.container)) {
+      // @ts-expect-error this.key should present in this.container
       if (this.container[key] === this.node) {
-        return this.setKey(key);
+        setKey.call(this, key);
+        return;
       }
     }
   }
@@ -215,7 +241,9 @@ export function _resyncKey(this: NodePath) {
 export function _resyncList(this: NodePath) {
   if (!this.parent || !this.inList) return;
 
-  const newContainer = this.parent[this.listKey];
+  const newContainer =
+    // @ts-expect-error this.listKey should present in this.parent
+    this.parent[this.listKey];
   if (this.container === newContainer) return;
 
   // container is out of sync. this is likely the result of it being reassigned
@@ -226,9 +254,10 @@ export function _resyncRemoved(this: NodePath) {
   if (
     this.key == null ||
     !this.container ||
+    // @ts-expect-error this.key should present in this.container
     this.container[this.key] !== this.node
   ) {
-    this._markRemoved();
+    _markRemoved.call(this);
   }
 }
 
@@ -246,17 +275,25 @@ export function pushContext(this: NodePath, context: TraversalContext) {
   this.setContext(context);
 }
 
-export function setup(this: NodePath, parentPath, container, listKey, key) {
+export function setup(
+  this: NodePath,
+  parentPath: NodePath | undefined,
+  container: t.Node | t.Node[],
+  listKey: string,
+  key: string | number,
+) {
   this.listKey = listKey;
   this.container = container;
 
   this.parentPath = parentPath || this.parentPath;
-  this.setKey(key);
+  setKey.call(this, key);
 }
 
-export function setKey(this: NodePath, key) {
+export function setKey(this: NodePath, key: string | number) {
   this.key = key;
-  this.node = this.container[this.key];
+  this.node =
+    // @ts-expect-error this.key must present in this.container
+    this.container[this.key];
   this.type = this.node?.type;
 }
 
@@ -276,6 +313,20 @@ export function requeue(this: NodePath, pathToQueue = this) {
 
   for (const context of contexts) {
     context.maybeQueue(pathToQueue);
+  }
+}
+
+export function requeueComputedKeyAndDecorators(
+  this: NodePath<t.Method | t.Property>,
+) {
+  const { context, node } = this;
+  if (!t.isPrivate(node) && node.computed) {
+    context.maybeQueue(this.get("key"));
+  }
+  if (node.decorators) {
+    for (const decorator of this.get("decorators")) {
+      context.maybeQueue(decorator);
+    }
   }
 }
 

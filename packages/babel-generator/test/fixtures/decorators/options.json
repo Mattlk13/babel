@@ -1,9 +1,3 @@
 {
-  "plugins": [
-    ["decorators", { "decoratorsBeforeExport": false }],
-    "classProperties",
-    "classPrivateProperties",
-    "classPrivateMethods"
-  ],
-  "decoratorsBeforeExport": true
+  "plugins": ["decorators"]
 }

@@ -2,32 +2,40 @@
 
 Using targets:
 {
-  "android": "90",
-  "chrome": "89",
-  "edge": "90",
-  "firefox": "78",
-  "ios": "13.4",
-  "opera": "75",
-  "safari": "14",
-  "samsung": "13"
+  "android": "128",
+  "chrome": "109",
+  "edge": "127",
+  "firefox": "115",
+  "ios": "15.6",
+  "opera": "110",
+  "opera_mobile": "80",
+  "safari": "17.5",
+  "samsung": "24"
 }
 
 Using modules transform: auto
 
 Using plugins:
-  proposal-private-property-in-object { android, chrome < 91, edge, firefox < 90, ios, opera, safari, samsung }
-  proposal-class-properties { firefox < 90, ios, safari < 15, samsung }
-  proposal-private-methods { firefox < 90, ios, safari < 15, samsung }
+  transform-duplicate-named-capturing-groups-regex { chrome < 126, firefox < 129, ios < 17.4, opera < 112, opera_mobile, samsung }
+  transform-regexp-modifiers { chrome < 125, firefox < 132, ios, opera < 111, opera_mobile, safari, samsung }
+  transform-unicode-sets-regex { chrome < 112, firefox < 116, ios < 17, samsung }
+  bugfix/transform-firefox-class-in-computed-class-key { firefox, ios < 16 }
+  bugfix/transform-safari-class-field-initializer-scope { ios < 16 }
+  transform-class-static-block { ios < 16.4 }
+  syntax-private-property-in-object
+  syntax-class-properties
   syntax-numeric-separator
-  proposal-logical-assignment-operators { firefox < 79, ios < 14, samsung }
   syntax-nullish-coalescing-operator
-  proposal-optional-chaining { android, chrome, edge, opera, samsung }
+  syntax-optional-chaining
   syntax-json-strings
   syntax-optional-catch-binding
+  transform-parameters { ios < 16.3 }
   syntax-async-generators
   syntax-object-rest-spread
-  proposal-export-namespace-from { firefox < 80, ios, safari }
+  transform-export-namespace-from { }
   transform-modules-commonjs
-  proposal-dynamic-import
+  transform-dynamic-import
+  syntax-top-level-await
+  syntax-import-meta
 
 Using polyfills: No polyfills were added, since the `useBuiltIns` option was not set.

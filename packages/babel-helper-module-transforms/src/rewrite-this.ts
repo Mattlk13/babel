@@ -1,23 +1,22 @@
-import { environmentVisitor } from "@babel/helper-replace-supers";
-import traverse from "@babel/traverse";
-import { numericLiteral, unaryExpression } from "@babel/types";
-import type * as t from "@babel/types";
-
-import type { NodePath, Visitor } from "@babel/traverse";
-export default function rewriteThis(programPath: NodePath) {
-  // Rewrite "this" to be "undefined".
-  traverse(programPath.node, { ...rewriteThisVisitor, noScope: true });
-}
+import { types as t } from "@babel/core";
+import traverse, { visitors, type NodePath } from "@babel/traverse";
 
 /**
- * A visitor to walk the tree, rewriting all `this` references in the top-level scope to be
- * `void 0` (undefined).
+ * A lazily constructed visitor to walk the tree, rewriting all `this` references in the
+ * top-level scope to be `void 0` (undefined).
+ *
  */
-const rewriteThisVisitor: Visitor = traverse.visitors.merge([
-  environmentVisitor,
-  {
-    ThisExpression(path: NodePath<t.ThisExpression>) {
-      path.replaceWith(unaryExpression("void", numericLiteral(0), true));
-    },
-  },
-]);
+let rewriteThisVisitor: Parameters<typeof traverse>[1];
+
+export default function rewriteThis(programPath: NodePath) {
+  if (!rewriteThisVisitor) {
+    rewriteThisVisitor = visitors.environmentVisitor({
+      ThisExpression(path) {
+        path.replaceWith(t.unaryExpression("void", t.numericLiteral(0), true));
+      },
+    });
+    rewriteThisVisitor.noScope = true;
+  }
+  // Rewrite "this" to be "undefined".
+  traverse(programPath.node, rewriteThisVisitor);
+}

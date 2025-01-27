@@ -1,4 +1,7 @@
-import highlight, { shouldHighlight, getChalk } from "@babel/highlight";
+import { getDefs, isColorSupported } from "./defs.ts";
+import { highlight } from "./highlight.ts";
+
+export { highlight };
 
 let deprecationWarningShown = false;
 
@@ -35,17 +38,6 @@ export interface Options {
 }
 
 /**
- * Chalk styles for code frame token types.
- */
-function getDefs(chalk) {
-  return {
-    gutter: chalk.grey,
-    marker: chalk.red.bold,
-    message: chalk.red.bold,
-  };
-}
-
-/**
  * RegExp to test for newlines in terminal.
  */
 
@@ -55,6 +47,8 @@ const NEWLINE = /\r\n|[\n\r\u2028\u2029]/;
  * Extract what lines should be marked and highlighted.
  */
 
+type MarkerLines = Record<number, true | [number, number]>;
+
 function getMarkerLines(
   loc: NodeLocation,
   source: Array<string>,
@@ -62,7 +56,7 @@ function getMarkerLines(
 ): {
   start: number;
   end: number;
-  markerLines: any;
+  markerLines: MarkerLines;
 } {
   const startLoc: Location = {
     column: 0,
@@ -91,7 +85,7 @@ function getMarkerLines(
   }
 
   const lineDiff = endLine - startLine;
-  const markerLines = {};
+  const markerLines: MarkerLines = {};
 
   if (lineDiff) {
     for (let i = 0; i <= lineDiff; i++) {
@@ -131,20 +125,17 @@ export function codeFrameColumns(
   loc: NodeLocation,
   opts: Options = {},
 ): string {
-  const highlighted =
-    (opts.highlightCode || opts.forceColor) && shouldHighlight(opts);
-  const chalk = getChalk(opts);
-  const defs = getDefs(chalk);
-  const maybeHighlight = (chalkFn, string) => {
-    return highlighted ? chalkFn(string) : string;
-  };
+  const shouldHighlight =
+    opts.forceColor || (isColorSupported() && opts.highlightCode);
+  const defs = getDefs(shouldHighlight);
+
   const lines = rawLines.split(NEWLINE);
   const { start, end, markerLines } = getMarkerLines(loc, lines, opts);
   const hasColumns = loc.start && typeof loc.start.column === "number";
 
   const numberMaxWidth = String(end).length;
 
-  const highlightedLines = highlighted ? highlight(rawLines, opts) : rawLines;
+  const highlightedLines = shouldHighlight ? highlight(rawLines) : rawLines;
 
   let frame = highlightedLines
     .split(NEWLINE, end)
@@ -165,26 +156,24 @@ export function codeFrameColumns(
 
           markerLine = [
             "\n ",
-            maybeHighlight(defs.gutter, gutter.replace(/\d/g, " ")),
+            defs.gutter(gutter.replace(/\d/g, " ")),
             " ",
             markerSpacing,
-            maybeHighlight(defs.marker, "^").repeat(numberOfMarkers),
+            defs.marker("^").repeat(numberOfMarkers),
           ].join("");
 
           if (lastMarkerLine && opts.message) {
-            markerLine += " " + maybeHighlight(defs.message, opts.message);
+            markerLine += " " + defs.message(opts.message);
           }
         }
         return [
-          maybeHighlight(defs.marker, ">"),
-          maybeHighlight(defs.gutter, gutter),
+          defs.marker(">"),
+          defs.gutter(gutter),
           line.length > 0 ? ` ${line}` : "",
           markerLine,
         ].join("");
       } else {
-        return ` ${maybeHighlight(defs.gutter, gutter)}${
-          line.length > 0 ? ` ${line}` : ""
-        }`;
+        return ` ${defs.gutter(gutter)}${line.length > 0 ? ` ${line}` : ""}`;
       }
     })
     .join("\n");
@@ -193,8 +182,8 @@ export function codeFrameColumns(
     frame = `${" ".repeat(numberMaxWidth + 1)}${opts.message}\n${frame}`;
   }
 
-  if (highlighted) {
-    return chalk.reset(frame);
+  if (shouldHighlight) {
+    return defs.reset(frame);
   } else {
     return frame;
   }

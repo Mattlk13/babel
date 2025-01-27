@@ -1,65 +1,86 @@
-import { FEATURES, hasFeature } from "./features";
+import type { types as t } from "@babel/core";
+import { FEATURES, hasFeature } from "./features.ts";
 
-type RegexpuOptions = {
-  useUnicodeFlag: boolean;
-  onNamedGroup: (name: string, index: number) => void;
-  namedGroup: boolean;
-  unicodePropertyEscape: boolean;
-  dotAllFlag: boolean;
-  lookbehind: boolean;
-};
+import type { RegexpuOptions } from "regexpu-core";
 
-export function generateRegexpuOptions(node, features): RegexpuOptions | null {
-  let useUnicodeFlag = false,
-    dotAllFlag = false,
-    unicodePropertyEscape = false,
-    namedGroup = false;
-  const { flags, pattern } = node;
-  const flagsIncludesU = flags.includes("u");
-
-  if (flagsIncludesU) {
-    if (!hasFeature(features, FEATURES.unicodeFlag)) {
-      useUnicodeFlag = true;
-    }
-    if (
-      hasFeature(features, FEATURES.unicodePropertyEscape) &&
-      /\\[pP]{/.test(pattern)
-    ) {
-      unicodePropertyEscape = true;
-    }
-  }
-
-  if (hasFeature(features, FEATURES.dotAllFlag) && flags.indexOf("s") >= 0) {
-    dotAllFlag = true;
-  }
-  if (
-    hasFeature(features, FEATURES.namedCaptureGroups) &&
-    /\(\?<(?![=!])/.test(pattern)
-  ) {
-    namedGroup = true;
-  }
-  if (
-    !namedGroup &&
-    !unicodePropertyEscape &&
-    !dotAllFlag &&
-    (!flagsIncludesU || useUnicodeFlag)
-  ) {
-    return null;
-  }
-  // Now we have to feed regexpu-core the regex
-  if (flagsIncludesU && flags.indexOf("s") >= 0) {
-    // When flags includes u, `config.unicode` will be enabled even if `u` is supported natively.
-    // In this case we have to enable dotAllFlag, otherwise `rewritePattern(/./su)` will return
-    // incorrect result
-    // https://github.com/mathiasbynens/regexpu-core/blob/v4.6.0/rewrite-pattern.js#L191
-    dotAllFlag = true;
-  }
-  return {
-    useUnicodeFlag,
-    onNamedGroup: () => {},
-    namedGroup,
-    unicodePropertyEscape,
-    dotAllFlag,
-    lookbehind: true,
+export function generateRegexpuOptions(
+  pattern: string,
+  toTransform: number,
+): RegexpuOptions {
+  const feat = (name: keyof typeof FEATURES) => {
+    return hasFeature(toTransform, FEATURES[name]) ? "transform" : false;
   };
+
+  const featDuplicateNamedGroups = (): "transform" | false => {
+    if (!feat("duplicateNamedCaptureGroups")) return false;
+
+    // This can return false positive, for example for /\(?<a>\)/.
+    // However, it's such a rare occurrence that it's ok to compile
+    // the regexp even if we only need to compile regexps with
+    // duplicate named capturing groups.
+    const regex = /\(\?<([^>]+)>/g;
+    const seen = new Set();
+    for (let match; (match = regex.exec(pattern)); seen.add(match[1])) {
+      if (seen.has(match[1])) return "transform";
+    }
+    return false;
+  };
+
+  return {
+    unicodeFlag: feat("unicodeFlag"),
+    unicodeSetsFlag: feat("unicodeSetsFlag"),
+    dotAllFlag: feat("dotAllFlag"),
+    unicodePropertyEscapes: feat("unicodePropertyEscape"),
+    namedGroups: feat("namedCaptureGroups") || featDuplicateNamedGroups(),
+    onNamedGroup: () => {},
+    modifiers: feat("modifiers"),
+  };
+}
+
+export function canSkipRegexpu(
+  node: t.RegExpLiteral,
+  options: RegexpuOptions,
+): boolean {
+  const { flags, pattern } = node;
+
+  if (flags.includes("v")) {
+    if (options.unicodeSetsFlag === "transform") return false;
+  }
+
+  if (flags.includes("u")) {
+    if (options.unicodeFlag === "transform") return false;
+    if (
+      options.unicodePropertyEscapes === "transform" &&
+      /\\p\{/i.test(pattern)
+    ) {
+      return false;
+    }
+  }
+
+  if (flags.includes("s")) {
+    if (options.dotAllFlag === "transform") return false;
+  }
+
+  if (options.namedGroups === "transform" && /\(\?<(?![=!])/.test(pattern)) {
+    return false;
+  }
+
+  if (options.modifiers === "transform" && /\(\?[\w-]+:/.test(pattern)) {
+    return false;
+  }
+
+  return true;
+}
+
+export function transformFlags(regexpuOptions: RegexpuOptions, flags: string) {
+  if (regexpuOptions.unicodeSetsFlag === "transform") {
+    flags = flags.replace("v", "u");
+  }
+  if (regexpuOptions.unicodeFlag === "transform") {
+    flags = flags.replace("u", "");
+  }
+  if (regexpuOptions.dotAllFlag === "transform") {
+    flags = flags.replace("s", "");
+  }
+  return flags;
 }

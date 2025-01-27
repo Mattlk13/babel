@@ -1,13 +1,11 @@
 import { declare } from "@babel/helper-plugin-utils";
+import { isRequired } from "@babel/helper-compilation-targets";
 import annotateAsPure from "@babel/helper-annotate-as-pure";
-import nameFunction from "@babel/helper-function-name";
-import splitExportDeclaration from "@babel/helper-split-export-declaration";
 import { types as t } from "@babel/core";
 import globals from "globals";
-import transformClass from "./transformClass";
-import type { Visitor, NodePath } from "@babel/traverse";
+import transformClass from "./transformClass.ts";
 
-const getBuiltinClasses = category =>
+const getBuiltinClasses = (category: keyof typeof globals) =>
   Object.keys(globals[category]).filter(name => /^[A-Z]/.test(name));
 
 const builtinClasses = new Set([
@@ -15,19 +13,27 @@ const builtinClasses = new Set([
   ...getBuiltinClasses("browser"),
 ]);
 
-export default declare((api, options) => {
-  api.assertVersion(7);
+export interface Options {
+  loose?: boolean;
+}
 
-  const { loose } = options;
+export default declare((api, options: Options) => {
+  api.assertVersion(REQUIRED_VERSION(7));
 
-  const setClassMethods = api.assumption("setClassMethods") ?? options.loose;
-  const constantSuper = api.assumption("constantSuper") ?? options.loose;
+  const { loose = false } = options;
+
+  const setClassMethods = api.assumption("setClassMethods") ?? loose;
+  const constantSuper = api.assumption("constantSuper") ?? loose;
   const superIsCallableConstructor =
-    api.assumption("superIsCallableConstructor") ?? options.loose;
-  const noClassCalls = api.assumption("noClassCalls") ?? options.loose;
+    api.assumption("superIsCallableConstructor") ?? loose;
+  const noClassCalls = api.assumption("noClassCalls") ?? loose;
+  const supportUnicodeId = !isRequired(
+    "transform-unicode-escapes",
+    api.targets(),
+  );
 
   // todo: investigate traversal requeueing
-  const VISITED = Symbol();
+  const VISITED = new WeakSet();
 
   return {
     name: "transform-classes",
@@ -35,13 +41,21 @@ export default declare((api, options) => {
     visitor: {
       ExportDefaultDeclaration(path) {
         if (!path.get("declaration").isClassDeclaration()) return;
-        splitExportDeclaration(path);
+        if (!process.env.BABEL_8_BREAKING && !USE_ESM && !IS_STANDALONE) {
+          // polyfill when being run by an older Babel version
+          path.splitExportDeclaration ??=
+            // eslint-disable-next-line no-restricted-globals
+            require("@babel/traverse").NodePath.prototype.splitExportDeclaration;
+        }
+        path.splitExportDeclaration();
       },
 
       ClassDeclaration(path) {
         const { node } = path;
 
-        const ref = node.id || path.scope.generateUidIdentifier("class");
+        const ref = node.id
+          ? t.cloneNode(node.id)
+          : path.scope.generateUidIdentifier("class");
 
         path.replaceWith(
           t.variableDeclaration("let", [
@@ -52,35 +66,44 @@ export default declare((api, options) => {
 
       ClassExpression(path, state) {
         const { node } = path;
-        if (node[VISITED]) return;
+        if (VISITED.has(node)) return;
 
-        const inferred = nameFunction(path);
-        if (inferred && inferred !== node) {
-          path.replaceWith(inferred);
-          return;
+        if (!process.env.BABEL_8_BREAKING && !USE_ESM && !IS_STANDALONE) {
+          // polyfill when being run by an older Babel version
+          path.ensureFunctionName ??=
+            // eslint-disable-next-line no-restricted-globals
+            require("@babel/traverse").NodePath.prototype.ensureFunctionName;
         }
+        const replacement = path.ensureFunctionName(supportUnicodeId);
+        if (replacement && replacement.node !== node) return;
 
-        node[VISITED] = true;
+        VISITED.add(node);
 
-        path.replaceWith(
-          transformClass(path, state.file, builtinClasses, loose, {
-            setClassMethods,
-            constantSuper,
-            superIsCallableConstructor,
-            noClassCalls,
-          }),
+        const [replacedPath] = path.replaceWith(
+          transformClass(
+            path,
+            state.file,
+            builtinClasses,
+            loose,
+            {
+              setClassMethods,
+              constantSuper,
+              superIsCallableConstructor,
+              noClassCalls,
+            },
+            supportUnicodeId,
+          ),
         );
 
-        if (path.isCallExpression()) {
-          annotateAsPure(path);
-          // todo: improve babel types
-          const callee = path.get("callee") as unknown as NodePath;
+        if (replacedPath.isCallExpression()) {
+          annotateAsPure(replacedPath);
+          const callee = replacedPath.get("callee");
           if (callee.isArrowFunctionExpression()) {
             // This is an IIFE, so we don't need to worry about the noNewArrows assumption
             callee.arrowFunctionToExpression();
           }
         }
       },
-    } as Visitor<any>,
+    },
   };
 });

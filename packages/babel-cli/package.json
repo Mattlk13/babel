@@ -1,6 +1,6 @@
 {
   "name": "@babel/cli",
-  "version": "7.15.7",
+  "version": "7.26.4",
   "description": "Babel command line.",
   "author": "The Babel Team (https://babel.dev/team)",
   "homepage": "https://babel.dev/docs/en/next/babel-cli",
@@ -24,25 +24,27 @@
     "compiler"
   ],
   "dependencies": {
-    "commander": "^4.0.1",
-    "convert-source-map": "^1.1.0",
+    "@jridgewell/trace-mapping": "^0.3.25",
+    "commander": "condition:BABEL_8_BREAKING ? ^12.1.0 : ^6.2.0 (esm:program|default)",
+    "convert-source-map": "^2.0.0",
     "fs-readdir-recursive": "^1.1.0",
-    "glob": "^7.0.0",
+    "glob": "condition:BABEL_8_BREAKING ? ^10.3.12 : ^7.2.0 (esm:sync|default)",
     "make-dir": "condition:BABEL_8_BREAKING ? : ^2.1.0",
-    "slash": "condition:BABEL_8_BREAKING ? ^3.0.0 : ^2.0.0",
-    "source-map": "^0.5.0"
+    "slash": "condition:BABEL_8_BREAKING ? ^3.0.0 : ^2.0.0"
   },
   "optionalDependencies": {
     "@nicolo-ribaudo/chokidar-2": "condition:BABEL_8_BREAKING ? : 2.1.8-no-fsevents.3",
-    "chokidar": "^3.4.0"
+    "chokidar": "^3.6.0"
   },
   "peerDependencies": {
     "@babel/core": "^7.0.0-0"
   },
   "devDependencies": {
-    "@babel/core": "workspace:*",
-    "@babel/helper-fixtures": "workspace:*",
-    "rimraf": "^3.0.0"
+    "@babel/core": "workspace:^",
+    "@babel/helper-transform-fixture-test-runner": "workspace:^",
+    "@types/fs-readdir-recursive": "^1.1.0",
+    "@types/glob": "^7.2.0",
+    "semver": "^6.3.1"
   },
   "bin": {
     "babel": "./bin/babel.js",
@@ -50,5 +52,36 @@
   },
   "engines": {
     "node": ">=6.9.0"
-  }
+  },
+  "conditions": {
+    "BABEL_8_BREAKING": [
+      {
+        "engines": {
+          "node": "^18.20.0 || ^20.17.0 || >=22.8.0"
+        }
+      },
+      {
+        "exports": null
+      }
+    ],
+    "USE_ESM": [
+      {
+        "bin": {
+          "babel": "./bin/babel.mjs",
+          "babel-external-helpers": "./bin/babel-external-helpers.mjs"
+        }
+      },
+      {
+        "type": "commonjs"
+      }
+    ]
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "type": "module"
 }

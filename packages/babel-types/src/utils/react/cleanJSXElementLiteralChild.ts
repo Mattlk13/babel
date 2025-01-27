@@ -1,10 +1,9 @@
-import { stringLiteral } from "../../builders/generated";
-import type * as t from "../..";
+import { stringLiteral } from "../../builders/generated/index.ts";
+import type * as t from "../../index.ts";
+import { inherits } from "../../index.ts";
 
 export default function cleanJSXElementLiteralChild(
-  child: {
-    value: string;
-  },
+  child: t.JSXText,
   args: Array<t.Node>,
 ) {
   const lines = child.value.split(/\r\n|\n|\r/);
@@ -12,7 +11,7 @@ export default function cleanJSXElementLiteralChild(
   let lastNonEmptyLine = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].match(/[^ \t]/)) {
+    if (/[^ \t]/.exec(lines[i])) {
       lastNonEmptyLine = i;
     }
   }
@@ -31,12 +30,12 @@ export default function cleanJSXElementLiteralChild(
 
     // trim whitespace touching a newline
     if (!isFirstLine) {
-      trimmedLine = trimmedLine.replace(/^[ ]+/, "");
+      trimmedLine = trimmedLine.replace(/^ +/, "");
     }
 
     // trim whitespace touching an endline
     if (!isLastLine) {
-      trimmedLine = trimmedLine.replace(/[ ]+$/, "");
+      trimmedLine = trimmedLine.replace(/ +$/, "");
     }
 
     if (trimmedLine) {
@@ -48,5 +47,5 @@ export default function cleanJSXElementLiteralChild(
     }
   }
 
-  if (str) args.push(stringLiteral(str));
+  if (str) args.push(inherits(stringLiteral(str), child));
 }

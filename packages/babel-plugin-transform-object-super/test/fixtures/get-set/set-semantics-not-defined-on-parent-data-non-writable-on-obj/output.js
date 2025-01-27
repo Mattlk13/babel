@@ -1,13 +1,11 @@
 "use strict";
 
 var _obj;
-
 const Base = {};
 const obj = _obj = {
   set() {
-    return babelHelpers.set(babelHelpers.getPrototypeOf(_obj), "test", 3, this, true);
+    return babelHelpers.superPropSet(_obj, "test", 3, this, 1);
   }
-
 };
 Object.defineProperty(obj, 'test', {
   value: 2,
@@ -18,7 +16,7 @@ Object.defineProperty(obj, 'test', {
 Object.setPrototypeOf(obj, Base);
 expect(() => {
   obj.set();
-}).toThrow();
+}).toThrow(TypeError);
 expect(Base.test).toBeUndefined();
 expect(obj.test).toBe(2);
 const desc = Object.getOwnPropertyDescriptor(obj, 'test');

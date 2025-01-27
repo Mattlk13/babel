@@ -25,6 +25,8 @@ import "core-js/modules/es.string.replace.js";
 import "core-js/modules/es.string.trim.js";
 import "core-js/modules/es.string.trim-end.js";
 import "core-js/modules/es.string.trim-start.js";
+import "core-js/modules/es.typed-array.fill.js";
+import "core-js/modules/es.typed-array.set.js";
 import "core-js/modules/es.typed-array.sort.js";
 import "core-js/modules/web.dom-collections.for-each.js";
 import "core-js/modules/web.dom-collections.iterator.js";
@@ -33,9 +35,7 @@ import "core-js/modules/web.queue-microtask.js";
 import "core-js/modules/web.url.js";
 import "core-js/modules/web.url.to-json.js";
 import "core-js/modules/web.url-search-params.js";
-
 async function a() {
   await 1;
 }
-
 (function () {});

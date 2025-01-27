@@ -1,11 +1,13 @@
-import gensync from "gensync";
+import gensync, { type Handler } from "gensync";
 
-import loadConfig from "./config";
-import type { InputOptions, ResolvedConfig } from "./config";
-import { run } from "./transformation";
+import loadConfig from "./config/index.ts";
+import type { InputOptions, ResolvedConfig } from "./config/index.ts";
+import { run } from "./transformation/index.ts";
 import type * as t from "@babel/types";
 
-import type { FileResult, FileResultCallback } from "./transformation";
+import { beginHiddenCallStack } from "./errors/rewrite-stack-trace.ts";
+
+import type { FileResult, FileResultCallback } from "./transformation/index.ts";
 type AstRoot = t.File | t.Program;
 
 type TransformFromAst = {
@@ -19,13 +21,11 @@ type TransformFromAst = {
   (ast: AstRoot, code: string, opts?: InputOptions | null): FileResult | null;
 };
 
-const transformFromAstRunner = gensync<
-  (
-    ast: AstRoot,
-    code: string,
-    opts: InputOptions | undefined | null,
-  ) => FileResult | null
->(function* (ast, code, opts) {
+const transformFromAstRunner = gensync(function* (
+  ast: AstRoot,
+  code: string,
+  opts: InputOptions | undefined | null,
+): Handler<FileResult | null> {
   const config: ResolvedConfig | null = yield* loadConfig(opts);
   if (config === null) return null;
 
@@ -37,22 +37,48 @@ const transformFromAstRunner = gensync<
 export const transformFromAst: TransformFromAst = function transformFromAst(
   ast,
   code,
-  opts,
-  callback?,
+  optsOrCallback?: InputOptions | null | undefined | FileResultCallback,
+  maybeCallback?: FileResultCallback,
 ) {
-  if (typeof opts === "function") {
-    callback = opts;
+  let opts: InputOptions | undefined | null;
+  let callback: FileResultCallback | undefined;
+  if (typeof optsOrCallback === "function") {
+    callback = optsOrCallback;
     opts = undefined;
+  } else {
+    opts = optsOrCallback;
+    callback = maybeCallback;
   }
 
-  // For backward-compat with Babel 6, we allow sync transformation when
-  // no callback is given. Will be dropped in some future Babel major version.
   if (callback === undefined) {
-    return transformFromAstRunner.sync(ast, code, opts);
+    if (process.env.BABEL_8_BREAKING) {
+      throw new Error(
+        "Starting from Babel 8.0.0, the 'transformFromAst' function expects a callback. If you need to call it synchronously, please use 'transformFromAstSync'.",
+      );
+    } else {
+      // console.warn(
+      //   "Starting from Babel 8.0.0, the 'transformFromAst' function will expect a callback. If you need to call it synchronously, please use 'transformFromAstSync'.",
+      // );
+      return beginHiddenCallStack(transformFromAstRunner.sync)(ast, code, opts);
+    }
   }
 
-  transformFromAstRunner.errback(ast, code, opts, callback);
+  beginHiddenCallStack(transformFromAstRunner.errback)(
+    ast,
+    code,
+    opts,
+    callback,
+  );
 };
 
-export const transformFromAstSync = transformFromAstRunner.sync;
-export const transformFromAstAsync = transformFromAstRunner.async;
+export function transformFromAstSync(
+  ...args: Parameters<typeof transformFromAstRunner.sync>
+) {
+  return beginHiddenCallStack(transformFromAstRunner.sync)(...args);
+}
+
+export function transformFromAstAsync(
+  ...args: Parameters<typeof transformFromAstRunner.async>
+) {
+  return beginHiddenCallStack(transformFromAstRunner.async)(...args);
+}

@@ -1,5 +1,4 @@
-import { addComment } from "@babel/types";
-import type { Node } from "@babel/types";
+import { addComment, type Node } from "@babel/types";
 
 const PURE_ANNOTATION = "#__PURE__";
 
@@ -10,7 +9,9 @@ const isPureAnnotated = ({ leadingComments }: Node): boolean =>
 export default function annotateAsPure(
   pathOrNode: Node | { node: Node },
 ): void {
-  const node = pathOrNode["node"] || pathOrNode;
+  const node =
+    // @ts-expect-error Node will not have `node` property
+    (pathOrNode["node"] || pathOrNode) as Node;
   if (isPureAnnotated(node)) {
     return;
   }

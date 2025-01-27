@@ -2,8 +2,9 @@ import slash from "slash";
 import path from "path";
 import fs from "fs";
 
-import * as util from "./util";
-import type { CmdOptions } from "./options";
+import * as util from "./util.ts";
+import * as watcher from "./watcher.ts";
+import type { CmdOptions } from "./options.ts";
 
 const FILE_TYPE = Object.freeze({
   NON_COMPILABLE: "NON_COMPILABLE",
@@ -21,8 +22,6 @@ export default async function ({
   cliOptions,
   babelOptions,
 }: CmdOptions): Promise<void> {
-  const filenames = cliOptions.filenames;
-
   async function write(
     src: string,
     base: string,
@@ -50,23 +49,29 @@ export default async function ({
 
       if (!res) return FILE_TYPE.IGNORED;
 
-      // we've requested explicit sourcemaps to be written to disk
-      if (
-        res.map &&
-        babelOptions.sourceMaps &&
-        babelOptions.sourceMaps !== "inline"
-      ) {
-        const mapLoc = dest + ".map";
-        res.code = util.addSourceMappingUrl(res.code, mapLoc);
-        res.map.file = path.basename(relative);
-        outputFileSync(mapLoc, JSON.stringify(res.map));
+      if (res.map) {
+        let outputMap: "both" | "external" | false = false;
+        if (babelOptions.sourceMaps && babelOptions.sourceMaps !== "inline") {
+          outputMap = "external";
+        } else if (babelOptions.sourceMaps == null) {
+          outputMap = util.hasDataSourcemap(res.code) ? "external" : "both";
+        }
+
+        if (outputMap) {
+          const mapLoc = dest + ".map";
+          if (outputMap === "external") {
+            res.code = util.addSourceMappingUrl(res.code, mapLoc);
+          }
+          res.map.file = path.basename(relative);
+          outputFileSync(mapLoc, JSON.stringify(res.map));
+        }
       }
 
       outputFileSync(dest, res.code);
       util.chmod(src, dest);
 
       if (cliOptions.verbose) {
-        console.log(src + " -> " + dest);
+        console.log(path.relative(process.cwd(), src) + " -> " + dest);
       }
 
       return FILE_TYPE.COMPILED;
@@ -114,9 +119,7 @@ export default async function ({
 
       const files = util.readdir(dirname, cliOptions.includeDotfiles);
       for (const filename of files) {
-        const src = path.join(dirname, filename);
-
-        const written = await handleFile(src, dirname);
+        const written = await handleFile(filename, dirname);
         if (written) count += 1;
       }
 
@@ -130,7 +133,7 @@ export default async function ({
   }
 
   let compiledFiles = 0;
-  let startTime = null;
+  let startTime: [number, number] | null = null;
 
   const logSuccess = util.debounce(function () {
     if (startTime === null) {
@@ -150,6 +153,8 @@ export default async function ({
     startTime = null;
   }, 100);
 
+  if (cliOptions.watch) watcher.enable({ enableGlobbing: true });
+
   if (!cliOptions.skipInitialBuild) {
     if (cliOptions.deleteDirOnStart) {
       util.deleteDir(cliOptions.outDir);
@@ -162,7 +167,6 @@ export default async function ({
     for (const filename of cliOptions.filenames) {
       // compiledFiles is just incremented without reading its value, so we
       // don't risk race conditions.
-      // eslint-disable-next-line require-atomic-updates
       compiledFiles += await handle(filename);
     }
 
@@ -173,44 +177,76 @@ export default async function ({
   }
 
   if (cliOptions.watch) {
-    const chokidar = util.requireChokidar();
+    // This, alongside with debounce, allows us to only log
+    // when we are sure that all the files have been compiled.
+    let processing = 0;
+    const { filenames } = cliOptions;
+    let getBase: (filename: string) => string | null;
+    if (filenames.length === 1) {
+      // fast path: If there is only one filenames, we know it must be the base
+      const base = filenames[0];
+      const absoluteBase = path.resolve(base);
+      getBase = filename => {
+        return filename === absoluteBase ? path.dirname(base) : base;
+      };
+    } else {
+      // A map from absolute compiled file path to its base, from which
+      // the output destination will be determined
+      const filenameToBaseMap: Map<string, string> = new Map(
+        filenames.map(filename => {
+          const absoluteFilename = path.resolve(filename);
+          return [absoluteFilename, path.dirname(filename)];
+        }),
+      );
 
-    filenames.forEach(function (filenameOrDir: string): void {
-      const watcher = chokidar.watch(filenameOrDir, {
-        persistent: true,
-        ignoreInitial: true,
-        awaitWriteFinish: {
-          stabilityThreshold: 50,
-          pollInterval: 10,
-        },
-      });
+      const absoluteFilenames: Map<string, string> = new Map(
+        filenames.map(filename => {
+          const absoluteFilename = path.resolve(filename);
+          return [absoluteFilename, filename];
+        }),
+      );
 
-      // This, alongside with debounce, allows us to only log
-      // when we are sure that all the files have been compiled.
-      let processing = 0;
-
-      ["add", "change"].forEach(function (type: string): void {
-        watcher.on(type, async function (filename: string) {
-          processing++;
-          if (startTime === null) startTime = process.hrtime();
-
-          try {
-            await handleFile(
-              filename,
-              filename === filenameOrDir
-                ? path.dirname(filenameOrDir)
-                : filenameOrDir,
-            );
-
-            compiledFiles++;
-          } catch (err) {
-            console.error(err);
+      const { sep } = path;
+      // determine base from the absolute file path
+      getBase = filename => {
+        const base = filenameToBaseMap.get(filename);
+        if (base !== undefined) {
+          return base;
+        }
+        for (const [absoluteFilenameOrDir, relative] of absoluteFilenames) {
+          if (filename.startsWith(absoluteFilenameOrDir + sep)) {
+            filenameToBaseMap.set(filename, relative);
+            return relative;
           }
+        }
+        // Can't determine the base, probably external deps
+        return "";
+      };
+    }
 
-          processing--;
-          if (processing === 0 && !cliOptions.quiet) logSuccess();
-        });
-      });
+    filenames.forEach(filenameOrDir => {
+      watcher.watch(filenameOrDir);
+    });
+
+    watcher.startWatcher();
+
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+    watcher.onFilesChange(async filenames => {
+      processing++;
+      if (startTime === null) startTime = process.hrtime();
+
+      try {
+        const written = await Promise.all(
+          filenames.map(filename => handleFile(filename, getBase(filename))),
+        );
+
+        compiledFiles += written.filter(Boolean).length;
+      } catch (err) {
+        console.error(err);
+      }
+
+      processing--;
+      if (processing === 0 && !cliOptions.quiet) logSuccess();
     });
   }
 }

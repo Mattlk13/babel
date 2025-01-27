@@ -1,3 +1,4 @@
 {
-  "plugins": ["transform-for-of", "transform-flow-strip-types"]
+  "plugins": ["transform-for-of"],
+  "presets": ["typescript"]
 }

@@ -1,15 +1,20 @@
-import { loadOptions as loadOptionsOrig } from "../lib";
+import * as babel from "../lib/index.js";
 import path from "path";
 import { fileURLToPath } from "url";
+import { itBabel7, itBabel7NoESM } from "$repo-utils";
 
 const cwd = path.dirname(fileURLToPath(import.meta.url));
 
 function loadOptions(opts) {
-  return loadOptionsOrig({ cwd, ...opts });
+  return babel.loadOptionsSync({ cwd, ...opts });
+}
+
+function loadOptionsAsync(opts) {
+  return babel.loadOptionsAsync({ cwd, ...opts });
 }
 
 describe("option-manager", () => {
-  it("throws for babel 5 plugin", () => {
+  itBabel7NoESM("throws for babel 5 plugin", () => {
     return expect(() => {
       loadOptions({
         plugins: [({ Plugin }) => new Plugin("object-assign", {})],
@@ -61,10 +66,10 @@ describe("option-manager", () => {
       }).toThrowErrorMatchingSnapshot();
     });
 
-    it("should not throw when a preset string followed by valid preset object", () => {
+    it("should not throw when a preset string followed by valid preset object", async () => {
       const { plugin } = makePlugin();
       expect(
-        loadOptions({
+        await loadOptionsAsync({
           presets: [
             "@babel/env",
             { plugins: [[plugin, undefined, "my-plugin"]] },
@@ -84,7 +89,7 @@ describe("option-manager", () => {
           ],
         });
       }).toThrow(
-        /Duplicate plugin\/preset detected.*Duplicates detected are.*my-plugin.*my-plugin/ms,
+        /Duplicate plugin\/preset detected.*Duplicates detected are.*my-plugin.*my-plugin/s,
       );
       expect(calls).toEqual([]);
     });
@@ -197,7 +202,7 @@ describe("option-manager", () => {
   });
 
   describe("mergeOptions", () => {
-    it("throws for removed babel 5 options", () => {
+    it("throws for removed babel 5 options: randomOption", () => {
       return expect(() => {
         loadOptions({
           randomOption: true,
@@ -205,14 +210,13 @@ describe("option-manager", () => {
       }).toThrow(/Unknown option: .randomOption/);
     });
 
-    it("throws for removed babel 5 options", () => {
+    it("throws for removed babel 5 options: auxiliaryComment", () => {
       return expect(() => {
         loadOptions({
           auxiliaryComment: true,
           blacklist: true,
         });
       }).toThrow(
-        // eslint-disable-next-line max-len
         /Using removed Babel 5 option: .auxiliaryComment - Use `auxiliaryCommentBefore` or `auxiliaryCommentAfter`/,
       );
     });
@@ -234,8 +238,8 @@ describe("option-manager", () => {
       "es5_object",
       "es2015_default_function",
       "es2015_default_object",
-    ])("%p should work", name => {
-      const options = loadOptions({
+    ])("%p should work", async name => {
+      const options = await loadOptionsAsync({
         presets: [path.join(cwd, "fixtures/option-manager/presets", name)],
       });
 
@@ -244,16 +248,25 @@ describe("option-manager", () => {
       expect(options.presets).toHaveLength(0);
     });
 
-    it.each([
-      ["es2015_named", /Must export a default export when using ES6 modules/],
-      ["es2015_invalid", /Unsupported format: string/],
-      ["es5_invalid", /Unsupported format: string/],
-    ])("%p should throw %p", (name, msg) => {
-      expect(() =>
-        loadOptions({
-          presets: [path.join(cwd, "fixtures/option-manager/presets", name)],
+    itBabel7("es2015_named should throw", async () => {
+      await expect(
+        loadOptionsAsync({
+          presets: [
+            path.join(cwd, "fixtures/option-manager/presets", "es2015_named"),
+          ],
         }),
-      ).toThrow(msg);
+      ).rejects.toThrow(/Must export a default export when using ES6 modules/);
     });
+
+    it.each(["es2015_invalid", "es5_invalid"])(
+      "%p should throw",
+      async name => {
+        await expect(
+          loadOptionsAsync({
+            presets: [path.join(cwd, "fixtures/option-manager/presets", name)],
+          }),
+        ).rejects.toThrow(/Unsupported format: string/);
+      },
+    );
   });
 });

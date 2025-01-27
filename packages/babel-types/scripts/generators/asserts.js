@@ -1,8 +1,14 @@
-import definitions from "../../lib/definitions/index.js";
+import {
+  DEPRECATED_KEYS,
+  DEPRECATED_ALIASES,
+  FLIPPED_ALIAS_KEYS,
+  NODE_FIELDS,
+  VISITOR_KEYS,
+} from "../../lib/index.js";
 
 function addAssertHelper(type) {
   const result =
-    definitions.NODE_FIELDS[type] || definitions.FLIPPED_ALIAS_KEYS[type]
+    NODE_FIELDS[type] || FLIPPED_ALIAS_KEYS[type]
       ? `node is t.${type}`
       : "boolean";
 
@@ -18,8 +24,9 @@ export default function generateAsserts() {
  * This file is auto-generated! Do not modify it directly.
  * To re-generate run 'make build'
  */
-import is from "../../validators/is";
-import type * as t from "../..";
+import is from "../../validators/is.ts";
+import type * as t from "../../index.ts";
+import deprecationWarning from "../../utils/deprecationWarning.ts";
 
 function assert(type: string, node: any, opts?: any): void {
   if (!is(type, node, opts)) {
@@ -30,18 +37,27 @@ function assert(type: string, node: any, opts?: any): void {
   }
 }\n\n`;
 
-  Object.keys(definitions.VISITOR_KEYS).forEach(type => {
+  Object.keys(VISITOR_KEYS).forEach(type => {
     output += addAssertHelper(type);
   });
 
-  Object.keys(definitions.FLIPPED_ALIAS_KEYS).forEach(type => {
-    output += addAssertHelper(type);
-  });
+  Object.keys(FLIPPED_ALIAS_KEYS)
+    .filter(
+      type => !Object.prototype.hasOwnProperty.call(DEPRECATED_ALIASES, type)
+    )
+    .forEach(type => {
+      output += addAssertHelper(type);
+    });
 
-  Object.keys(definitions.DEPRECATED_KEYS).forEach(type => {
-    const newType = definitions.DEPRECATED_KEYS[type];
+  const deprecatedNodeTypesAndAliases = {
+    ...DEPRECATED_KEYS,
+    ...DEPRECATED_ALIASES,
+  };
+
+  Object.keys(deprecatedNodeTypesAndAliases).forEach(type => {
+    const newType = deprecatedNodeTypesAndAliases[type];
     output += `export function assert${type}(node: any, opts: any): void {
-  console.trace("The node type ${type} has been renamed to ${newType}");
+      deprecationWarning("assert${type}", "assert${newType}");
   assert("${type}", node, opts);
 }\n`;
   });

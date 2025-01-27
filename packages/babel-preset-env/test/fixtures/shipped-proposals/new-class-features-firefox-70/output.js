@@ -1,15 +1,9 @@
+var _A;
 var _foo = /*#__PURE__*/new WeakMap();
-
 class A {
   constructor() {
-    babelHelpers.classPrivateFieldInitSpec(this, _foo, {
-      writable: true,
-      value: void 0
-    });
+    babelHelpers.classPrivateFieldInitSpec(this, _foo, void 0);
   }
-
 }
-
-(() => {
-  register(A, _foo.has(A));
-})();
+_A = A;
+register(_A, _foo.has(babelHelpers.checkInRHS(_A)));

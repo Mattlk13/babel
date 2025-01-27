@@ -1,4 +1,4 @@
-import * as t from "../lib";
+import * as t from "../lib/index.js";
 import { parse } from "@babel/parser";
 
 describe("validators", function () {
@@ -263,6 +263,20 @@ describe("validators", function () {
         );
 
         expect(t.isReferenced(node, parent)).toBe(false);
+      });
+    });
+
+    describe("ClassDeclaration", () => {
+      it("returns true if node is a class heritage", function () {
+        const node = t.identifier("A");
+        const parent = t.classDeclaration(
+          t.identifier("C"),
+          node,
+          t.classBody([]),
+          [],
+        );
+
+        expect(t.isReferenced(node, parent)).toBe(true);
       });
     });
 

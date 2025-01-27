@@ -1,13 +1,11 @@
-import rule from "../../src/rules/no-deprecated-clone";
-import RuleTester from "../../../babel-eslint-shared-fixtures/utils/RuleTester";
+import rule from "../../lib/rules/no-deprecated-clone.cjs";
+import RuleTester from "../../../babel-eslint-shared-fixtures/utils/RuleTester.js";
 
 const cloneError = "t.clone() is deprecated. Use t.cloneNode() instead.";
 const cloneDeepError =
   "t.cloneDeep() is deprecated. Use t.cloneNode() instead.";
 
-const ruleTester = new RuleTester({
-  parserOptions: { sourceType: "module" },
-});
+const ruleTester = new RuleTester();
 
 ruleTester.run("no-deprecated-clone", rule, {
   valid: [
