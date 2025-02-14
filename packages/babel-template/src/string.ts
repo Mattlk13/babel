@@ -1,8 +1,9 @@
-import type { Formatter } from "./formatters";
-import type { TemplateOpts } from "./options";
-import { normalizeReplacements } from "./options";
-import parseAndBuildMetadata from "./parse";
-import populatePlaceholders from "./populate";
+import type { Formatter } from "./formatters.ts";
+import type { TemplateOpts } from "./options.ts";
+import type { Metadata } from "./parse.ts";
+import { normalizeReplacements } from "./options.ts";
+import parseAndBuildMetadata from "./parse.ts";
+import populatePlaceholders from "./populate.ts";
 
 export default function stringTemplate<T>(
   formatter: Formatter<T>,
@@ -11,7 +12,7 @@ export default function stringTemplate<T>(
 ): (arg?: unknown) => T {
   code = formatter.code(code);
 
-  let metadata;
+  let metadata: Metadata;
 
   return (arg?: unknown) => {
     const replacements = normalizeReplacements(arg);

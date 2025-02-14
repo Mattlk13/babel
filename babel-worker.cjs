@@ -1,8 +1,8 @@
-const { transformSync } = require("@babel/core");
+const { transformAsync } = require("@babel/core");
 const { mkdirSync, statSync, readFileSync, writeFileSync } = require("fs");
-const { dirname } = require("path");
-const chalk = require("chalk");
-const fancyLog = require("fancy-log");
+const path = require("path");
+const { log } = require("./scripts/utils/logger.cjs");
+const colors = require("picocolors");
 
 function needCompile(src, dest) {
   let destStat;
@@ -16,24 +16,38 @@ function needCompile(src, dest) {
     }
   }
   const srcStat = statSync(src);
-  return srcStat.mtimeMs > destStat.mtimeMs;
+  return srcStat.mtimeMs >= destStat.mtimeMs;
 }
 
-exports.transform = function (src, dest) {
-  mkdirSync(dirname(dest), { recursive: true });
+exports.transform = async function transform(src, dest, opts = {}) {
+  mkdirSync(path.dirname(dest), { recursive: true });
   if (!needCompile(src, dest)) {
     return;
   }
-  fancyLog(`Compiling '${chalk.cyan(src)}'...`);
+  log(`Compiling '${colors.cyan(src)}'...`);
   const content = readFileSync(src, { encoding: "utf8" });
-  const { code } = transformSync(content, {
+  const { code, map } = await transformAsync(content, {
     filename: src,
+    sourceFileName: path.relative(path.dirname(dest), src),
     caller: {
       // We have wrapped packages/babel-core/src/config/files/configuration.js with feature detection
       supportsDynamicImport: true,
       name: "babel-worker",
     },
+    ...opts,
   });
 
-  writeFileSync(dest, code, "utf8");
+  if (map) {
+    writeFileSync(
+      dest,
+      `${code}
+
+//# sourceMappingURL=${path.basename(dest)}.map
+`,
+      "utf8"
+    );
+    writeFileSync(dest + ".map", JSON.stringify(map), "utf8");
+  } else {
+    writeFileSync(dest, code, "utf8");
+  }
 };

@@ -1,36 +1,41 @@
-import eslint from "eslint";
-import path from "path";
+import { ESLint } from "eslint";
 import { fileURLToPath } from "url";
 
 describe("Babel config files", () => {
-  const babel8 = process.env.BABEL_8_BREAKING ? it : it.skip;
-
-  babel8("works with babel.config.mjs", () => {
-    const engine = new eslint.CLIEngine({ ignore: false });
-    expect(
-      engine.executeOnFiles([
-        path.resolve(
-          path.dirname(fileURLToPath(import.meta.url)),
-          `../fixtures/mjs-config-file/a.js`,
+  it("works with babel.config.mjs - ESLint " + ESLint.version, async () => {
+    if (parseInt(ESLint.version, 10) >= 9) {
+      const engine = new ESLint({
+        ignore: false,
+        overrideConfigFile: fileURLToPath(
+          new URL(
+            "../fixtures/mjs-config-file/eslint.config.js",
+            import.meta.url,
+          ),
         ),
-      ]),
-    ).toMatchObject({ errorCount: 0 });
-  });
-
-  const babel7node12 =
-    process.env.BABEL_8_BREAKING || parseInt(process.versions.node) < 12
-      ? it.skip
-      : it;
-
-  babel7node12("experimental worker works with babel.config.mjs", () => {
-    const engine = new eslint.CLIEngine({ ignore: false });
-    expect(
-      engine.executeOnFiles([
-        path.resolve(
-          path.dirname(fileURLToPath(import.meta.url)),
-          `../fixtures/mjs-config-file-babel-7/a.js`,
-        ),
-      ]),
-    ).toMatchObject({ errorCount: 0 });
+      });
+      // eslint-disable-next-line jest/no-conditional-expect
+      expect(
+        await engine.lintFiles([
+          fileURLToPath(
+            new URL("../fixtures/mjs-config-file/a.js", import.meta.url),
+          ),
+        ]),
+      ).toMatchObject([{ errorCount: 0, messages: [] }]);
+    } else {
+      const engine = new ESLint({
+        ignore: false,
+      });
+      // eslint-disable-next-line jest/no-conditional-expect
+      expect(
+        await engine.lintFiles([
+          fileURLToPath(
+            new URL(
+              "../fixtures/mjs-config-file-eslint-8/a.js",
+              import.meta.url,
+            ),
+          ),
+        ]),
+      ).toMatchObject([{ errorCount: 0, messages: [] }]);
+    }
   });
 });

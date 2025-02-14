@@ -1,10 +1,44 @@
 import path from "path";
 import type { Handler } from "gensync";
-import { makeStaticFileCache } from "./utils";
+import { makeStaticFileCache } from "./utils.ts";
 
-import type { ConfigFile, FilePackageData } from "./types";
+import type { ConfigFile, FilePackageData } from "./types.ts";
+
+import ConfigError from "../../errors/config-error.ts";
 
 const PACKAGE_FILENAME = "package.json";
+
+const readConfigPackage = makeStaticFileCache(
+  (filepath, content): ConfigFile => {
+    let options;
+    try {
+      options = JSON.parse(content) as unknown;
+    } catch (err) {
+      throw new ConfigError(
+        `Error while parsing JSON - ${err.message}`,
+        filepath,
+      );
+    }
+
+    if (!options) throw new Error(`${filepath}: No config detected`);
+
+    if (typeof options !== "object") {
+      throw new ConfigError(
+        `Config returned typeof ${typeof options}`,
+        filepath,
+      );
+    }
+    if (Array.isArray(options)) {
+      throw new ConfigError(`Expected config object but found array`, filepath);
+    }
+
+    return {
+      filepath,
+      dirname: path.dirname(filepath),
+      options,
+    };
+  },
+);
 
 /**
  * Find metadata about the package that this file is inside of. Resolution
@@ -32,30 +66,3 @@ export function* findPackageData(filepath: string): Handler<FilePackageData> {
 
   return { filepath, directories, pkg, isPackage };
 }
-
-const readConfigPackage = makeStaticFileCache(
-  (filepath, content): ConfigFile => {
-    let options;
-    try {
-      options = JSON.parse(content) as unknown;
-    } catch (err) {
-      err.message = `${filepath}: Error while parsing JSON - ${err.message}`;
-      throw err;
-    }
-
-    if (!options) throw new Error(`${filepath}: No config detected`);
-
-    if (typeof options !== "object") {
-      throw new Error(`${filepath}: Config returned typeof ${typeof options}`);
-    }
-    if (Array.isArray(options)) {
-      throw new Error(`${filepath}: Expected config object but found array`);
-    }
-
-    return {
-      filepath,
-      dirname: path.dirname(filepath),
-      options,
-    };
-  },
-);

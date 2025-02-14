@@ -1,27 +1,46 @@
-import * as babelPlugins from "./generated/plugins";
+import * as babelPlugins from "./generated/plugins.ts";
 
-export default (_: any, { loose = false } = {}) => {
+export default (_: any, opts: any = {}) => {
+  const {
+    loose = false,
+    decoratorsLegacy = false,
+    decoratorsVersion = "2018-09",
+    decoratorsBeforeExport,
+  } = opts;
+
   const plugins = [
-    babelPlugins.syntaxImportAssertions,
-    babelPlugins.proposalClassStaticBlock,
-  ];
-
-  if (!process.env.BABEL_8_BREAKING) {
+    [
+      babelPlugins.proposalDecorators,
+      {
+        version: decoratorsLegacy ? "legacy" : decoratorsVersion,
+        decoratorsBeforeExport,
+      },
+    ],
+    babelPlugins.proposalExplicitResourceManagement,
     // These are Stage 4
-    plugins.push(
-      babelPlugins.syntaxImportMeta,
-      babelPlugins.syntaxTopLevelAwait,
-      babelPlugins.proposalExportNamespaceFrom,
-      babelPlugins.proposalLogicalAssignmentOperators,
-      [babelPlugins.proposalOptionalChaining, { loose }],
-      [babelPlugins.proposalNullishCoalescingOperator, { loose }],
-      [babelPlugins.proposalClassProperties, { loose }],
-      babelPlugins.proposalJsonStrings,
-      babelPlugins.proposalNumericSeparator,
-      [babelPlugins.proposalPrivateMethods, { loose }],
-      babelPlugins.proposalPrivatePropertyInObject,
-    );
-  }
+    ...(process.env.BABEL_8_BREAKING
+      ? []
+      : [
+          babelPlugins.transformExportNamespaceFrom,
+          babelPlugins.transformLogicalAssignmentOperators,
+          [babelPlugins.transformOptionalChaining, { loose }],
+          [babelPlugins.transformNullishCoalescingOperator, { loose }],
+          [babelPlugins.transformClassProperties, { loose }],
+          babelPlugins.transformJsonStrings,
+          babelPlugins.transformJsonModules,
+          babelPlugins.transformNumericSeparator,
+          [babelPlugins.transformPrivateMethods, { loose }],
+          babelPlugins.transformPrivatePropertyInObject,
+          babelPlugins.transformClassStaticBlock,
+          babelPlugins.transformUnicodeSetsRegex,
+          babelPlugins.transformDuplicateNamedCapturingGroupsRegex,
+          babelPlugins.transformRegexpModifiers,
+          [
+            babelPlugins.syntaxImportAttributes,
+            { deprecatedAssertSyntax: true },
+          ],
+        ]),
+  ];
 
   return { plugins };
 };

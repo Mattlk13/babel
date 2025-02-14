@@ -1,11 +1,30 @@
 import path from "path";
 import escope from "eslint-scope";
 import unpad from "dedent";
-import { fileURLToPath } from "url";
-import { createRequire } from "module";
-import { parseForESLint } from "../lib/index.cjs";
+import { parseForESLint as parseForESLintOriginal } from "../lib/index.cjs";
+import { ESLint } from "eslint";
+import { itDummy, commonJS, IS_BABEL_8, itBabel7 } from "$repo-utils";
 
-const dirname = path.dirname(fileURLToPath(import.meta.url));
+function parseForESLint(code, options) {
+  return parseForESLintOriginal(code, {
+    requireConfigFile: false,
+    ...options,
+    babelOptions: {
+      configFile: false,
+      ...options.babelOptions,
+    },
+  });
+}
+
+const ESLINT_VERSION = ESLint.version;
+const isESLint7 = ESLINT_VERSION.startsWith("7.");
+const isESLint8 = ESLINT_VERSION.startsWith("8.");
+const { __dirname: dirname, require } = commonJS(import.meta.url);
+
+// @babel/eslint-parser 8 will drop ESLint 7 support
+
+const itESLint7 = isESLint7 && !process.env.BABEL_8_BREAKING ? it : itDummy;
+const itESLintGte8 = isESLint7 ? itDummy : it;
 
 const BABEL_OPTIONS = {
   configFile: path.resolve(
@@ -14,14 +33,34 @@ const BABEL_OPTIONS = {
   ),
 };
 const PROPS_TO_REMOVE = [
-  "importKind",
-  "exportKind",
-  "variance",
-  "typeArguments",
+  { key: "importKind", type: null },
+  { key: "exportKind", type: null },
+  { key: "variance", type: null },
+  { key: "typeArguments", type: null },
+  { key: "filename", type: null },
+  { key: "identifierName", type: null },
+  // For legacy estree AST
+  { key: "attributes", type: "ImportExpression" },
+];
+const PROPS_TO_REMOVE_ESLINT_LT_9 = [
+  // old espree doesn't support these
+  { key: "attributes", type: "ImportDeclaration" },
+  { key: "attributes", type: "ExportNamedDeclaration" },
+  { key: "attributes", type: "ExportAllDeclaration" },
+  { key: "options", type: "ImportExpression" },
 ];
 
 function deeplyRemoveProperties(obj, props) {
   for (const [k, v] of Object.entries(obj)) {
+    if (
+      props.some(
+        ({ key, type }) => key === k && (type == null || type === obj.type),
+      )
+    ) {
+      delete obj[k];
+      continue;
+    }
+
     if (typeof v === "object") {
       if (Array.isArray(v)) {
         for (const el of v) {
@@ -31,16 +70,9 @@ function deeplyRemoveProperties(obj, props) {
         }
       }
 
-      if (props.includes(k)) {
-        delete obj[k];
-      } else if (v != null) {
+      if (v != null) {
         deeplyRemoveProperties(v, props);
       }
-      continue;
-    }
-
-    if (props.includes(k)) {
-      delete obj[k];
     }
   }
 }
@@ -48,38 +80,82 @@ function deeplyRemoveProperties(obj, props) {
 describe("Babel and Espree", () => {
   let espree;
 
-  function parseAndAssertSame(code) {
+  const espreeOptions = {
+    ecmaFeatures: {
+      // enable JSX parsing
+      jsx: true,
+      // enable return in global scope
+      globalReturn: true,
+      // enable implied strict mode (if ecmaVersion >= 5)
+      impliedStrict: true,
+    },
+    tokens: true,
+    loc: true,
+    range: true,
+    comment: true,
+    sourceType: "module",
+  };
+
+  function parseAndAssertSame(code, babelEcmaFeatures = null) {
     code = unpad(code);
-    const espreeAST = espree.parse(code, {
-      ecmaFeatures: {
-        // enable JSX parsing
-        jsx: true,
-        // enable return in global scope
-        globalReturn: true,
-        // enable implied strict mode (if ecmaVersion >= 5)
-        impliedStrict: true,
-        // allow experimental object rest/spread
-        experimentalObjectRestSpread: true,
-      },
-      tokens: true,
-      loc: true,
-      range: true,
-      comment: true,
-      ecmaVersion: 2021,
-      sourceType: "module",
-    });
-    const babelAST = parseForESLint(code, {
-      eslintVisitorKeys: true,
-      eslintScopeManager: true,
-      babelOptions: BABEL_OPTIONS,
-    }).ast;
-    deeplyRemoveProperties(babelAST, PROPS_TO_REMOVE);
-    expect(babelAST).toEqual(espreeAST);
+
+    if (isESLint7) {
+      // ESLint 7
+      const espreeAST = espree.parse(code, {
+        ...espreeOptions,
+        ecmaVersion: 2021,
+      });
+      const babelAST = parseForESLint(code, {
+        eslintVisitorKeys: true,
+        eslintScopeManager: true,
+        babelOptions: BABEL_OPTIONS,
+        ecmaFeatures: babelEcmaFeatures,
+      }).ast;
+
+      deeplyRemoveProperties(babelAST, [
+        ...PROPS_TO_REMOVE,
+        ...PROPS_TO_REMOVE_ESLINT_LT_9,
+      ]);
+      expect(babelAST).toEqual(espreeAST);
+    } else if (isESLint8) {
+      // ESLint 8
+      const espreeAST = espree.parse(code, {
+        ...espreeOptions,
+        ecmaVersion: 2024,
+      });
+
+      const babelAST = parseForESLint(code, {
+        eslintVisitorKeys: true,
+        eslintScopeManager: true,
+        babelOptions: BABEL_OPTIONS,
+        ecmaFeatures: babelEcmaFeatures,
+      }).ast;
+
+      deeplyRemoveProperties(babelAST, [
+        ...PROPS_TO_REMOVE,
+        ...PROPS_TO_REMOVE_ESLINT_LT_9,
+      ]);
+      expect(babelAST).toEqual(espreeAST);
+    } else {
+      // ESLint 9
+      const espreeAST = espree.parse(code, {
+        ...espreeOptions,
+        ecmaVersion: "latest",
+      });
+
+      const babelAST = parseForESLint(code, {
+        eslintVisitorKeys: true,
+        eslintScopeManager: true,
+        babelOptions: BABEL_OPTIONS,
+        ecmaFeatures: babelEcmaFeatures,
+      }).ast;
+
+      deeplyRemoveProperties(babelAST, PROPS_TO_REMOVE);
+      expect(babelAST).toEqual(espreeAST);
+    }
   }
 
   beforeAll(() => {
-    const require = createRequire(import.meta.url);
-
     // Use the version of Espree that is a dependency of
     // the version of ESLint we are testing against.
     const espreePath = require.resolve("espree", {
@@ -322,12 +398,18 @@ describe("Babel and Espree", () => {
   });
 
   // Espree doesn't support the pipeline operator yet
-  it("pipeline operator (token)", () => {
+  itBabel7("pipeline operator (token)", () => {
     const code = "foo |> bar";
     const babylonAST = parseForESLint(code, {
       eslintVisitorKeys: true,
       eslintScopeManager: true,
-      babelOptions: BABEL_OPTIONS,
+      babelOptions: {
+        filename: "test.js",
+        parserOpts: {
+          plugins: [["pipelineOperator", { proposal: "minimal" }]],
+          tokens: true,
+        },
+      },
     }).ast;
     expect(babylonAST.tokens[1].type).toEqual("Punctuator");
   });
@@ -340,7 +422,11 @@ describe("Babel and Espree", () => {
       babelOptions: {
         filename: "test.js",
         parserOpts: {
-          plugins: [["recordAndTuple", { syntaxType: "hash" }]],
+          plugins: [
+            IS_BABEL_8()
+              ? "recordAndTuple"
+              : ["recordAndTuple", { syntaxType: "hash" }],
+          ],
           tokens: true,
         },
       },
@@ -353,7 +439,7 @@ describe("Babel and Espree", () => {
     );
   });
 
-  it("brace and bracket bar operator (token)", () => {
+  itBabel7("brace and bracket bar operator (token)", () => {
     const code = "{||}; [||]";
     const babylonAST = parseForESLint(code, {
       eslintVisitorKeys: true,
@@ -380,30 +466,28 @@ describe("Babel and Espree", () => {
     );
   });
 
-  if (process.env.BABEL_8_BREAKING) {
-    it("hash (token)", () => {
-      const code = "class A { #x }";
-      const babylonAST = parseForESLint(code, {
-        eslintVisitorKeys: true,
-        eslintScopeManager: true,
-        babelOptions: BABEL_OPTIONS,
-      }).ast;
-      expect(babylonAST.tokens[3].type).toEqual("PrivateIdentifier");
-      expect(babylonAST.tokens[3].value).toEqual("x");
-    });
-  } else {
-    // Espree doesn't support private fields yet
-    it("hash (token)", () => {
-      const code = "class A { #x }";
-      const babylonAST = parseForESLint(code, {
-        eslintVisitorKeys: true,
-        eslintScopeManager: true,
-        babelOptions: BABEL_OPTIONS,
-      }).ast;
-      expect(babylonAST.tokens[3].type).toEqual("Punctuator");
-      expect(babylonAST.tokens[3].value).toEqual("#");
-    });
-  }
+  itESLint7("hash (token) - ESLint 7", () => {
+    const code = "class A { #x }";
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: BABEL_OPTIONS,
+    }).ast;
+    expect(babylonAST.tokens[3].type).toEqual("Punctuator");
+    expect(babylonAST.tokens[3].value).toEqual("#");
+  });
+
+  itESLintGte8("private identifier (token) - ESLint 8", () => {
+    const code = "class A { #x }";
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: BABEL_OPTIONS,
+    }).ast;
+
+    expect(babylonAST.tokens[3].type).toEqual("PrivateIdentifier");
+    expect(babylonAST.tokens[3].value).toEqual("x");
+  });
 
   it("static (token)", () => {
     const code = `
@@ -438,16 +522,168 @@ describe("Babel and Espree", () => {
       babelOptions: {
         filename: "test.js",
         parserOpts: {
-          plugins: [
-            ["estree", { classFeatures: true }],
-            "classPrivateProperties",
-            "classProperties",
-          ],
+          plugins: [["estree", { classFeatures: true }]],
         },
       },
     }).ast;
     const classDeclaration = babylonAST.body[0];
     expect(classDeclaration.body.body[0].type).toEqual("PropertyDefinition");
+  });
+
+  itESLintGte8("class fields with ESLint 8", () => {
+    parseAndAssertSame(
+      `
+        class A {
+          x = 2;
+          static #y = 3;
+          asi
+          #m() {}
+        }
+      `,
+    );
+  });
+
+  itESLint7("static (token) - ESLint 7", () => {
+    const code = `
+      class A {
+        static m() {}
+        static() {}
+        static x;
+        static #y;
+        static;
+        static = 2;
+      }
+    `;
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: BABEL_OPTIONS,
+    }).ast;
+
+    const staticKw = { type: "Keyword", value: "static" };
+
+    expect(babylonAST.tokens[3]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[9]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[14]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[17]).toMatchObject(staticKw);
+    expect(
+      babylonAST.tokens[process.env.BABEL_8_BREAKING ? 20 : 21],
+    ).toMatchObject(staticKw);
+    expect(
+      babylonAST.tokens[process.env.BABEL_8_BREAKING ? 22 : 23],
+    ).toMatchObject(staticKw);
+  });
+
+  itESLintGte8("static (token) - ESLint 8", () => {
+    const code = `
+      class A {
+        static m() {}
+        static() {}
+        static x;
+        static #y;
+        static;
+        static = 2;
+      }
+    `;
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: BABEL_OPTIONS,
+    }).ast;
+
+    const staticKw = { type: "Keyword", value: "static" };
+
+    expect(babylonAST.tokens[3]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[9]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[14]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[17]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[20]).toMatchObject(staticKw);
+    expect(babylonAST.tokens[22]).toMatchObject(staticKw);
+  });
+
+  itESLint7("pipeline # topic token - ESLint 7", () => {
+    const code = `
+        x |> #
+        y |> #[0]
+        class A {
+          #x = y |>
+          #
+          z
+        }
+      `;
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: {
+        filename: "test.js",
+        parserOpts: {
+          plugins: [
+            ["pipelineOperator", { proposal: "hack", topicToken: "#" }],
+          ],
+          tokens: true,
+        },
+      },
+    }).ast;
+
+    const topicToken = { type: "Punctuator", value: "#" };
+    expect(babylonAST.tokens[2]).toMatchObject(topicToken);
+    expect(babylonAST.tokens[5]).toMatchObject(topicToken);
+    expect(babylonAST.tokens[17]).toMatchObject(topicToken);
+  });
+
+  itESLintGte8("pipeline # topic token - ESLint 8", () => {
+    const code = `
+      x |> #
+      y |> #[0]
+      class A {
+        #x = y |>
+        #
+        z
+      }
+    `;
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: {
+        filename: "test.js",
+        parserOpts: {
+          plugins: [
+            ["pipelineOperator", { proposal: "hack", topicToken: "#" }],
+          ],
+          tokens: true,
+        },
+      },
+    }).ast;
+
+    const topicToken = { type: "Punctuator", value: "#" };
+    expect(babylonAST.tokens[2]).toMatchObject(topicToken);
+    expect(babylonAST.tokens[5]).toMatchObject(topicToken);
+    expect(babylonAST.tokens[16]).toMatchObject(topicToken);
+  });
+
+  it.each(["^", "%", "^^", "@@"])("pipeline %s topic token", tok => {
+    const code = `
+        x |> ${tok}
+        y |> ${tok}[0]
+      `;
+
+    const babylonAST = parseForESLint(code, {
+      eslintVisitorKeys: true,
+      eslintScopeManager: true,
+      babelOptions: {
+        filename: "test.js",
+        parserOpts: {
+          plugins: [
+            ["pipelineOperator", { proposal: "hack", topicToken: tok }],
+          ],
+          tokens: true,
+        },
+      },
+    }).ast;
+
+    const topicToken = { type: "Punctuator", value: tok };
+    expect(babylonAST.tokens[2]).toMatchObject(topicToken);
+    expect(babylonAST.tokens[5]).toMatchObject(topicToken);
   });
 
   it("empty program with line comment", () => {
@@ -501,7 +737,7 @@ describe("Babel and Espree", () => {
     parseAndAssertSame("/affix-top|affix-bottom|affix|[a-z]/");
   });
 
-  it("regexp", () => {
+  it("regexp without flag", () => {
     parseAndAssertSame("const foo = /foo/;");
   });
 
@@ -614,23 +850,110 @@ describe("Babel and Espree", () => {
 
     it("do not allow import export everywhere", () => {
       expect(() => {
-        parseAndAssertSame('function F() { import a from "a"; }');
-      }).toThrow(
-        new SyntaxError(
-          "'import' and 'export' may only appear at the top level",
-        ),
-      );
+        parseForESLint('function F() { import a from "a"; }', {
+          babelOptions: BABEL_OPTIONS,
+        });
+      }).toThrow(/'import' and 'export' may only appear at the top level/);
     });
 
-    it("return outside function", () => {
-      parseAndAssertSame("return;");
-    });
-
-    it("super outside method", () => {
+    it("allowImportExportEverywhere", () => {
       expect(() => {
-        parseAndAssertSame("function F() { super(); }");
-      }).toThrow(new SyntaxError("'super' keyword outside a method"));
+        parseForESLint('function F() { import a from "a"; }', {
+          babelOptions: {
+            ...BABEL_OPTIONS,
+            parserOpts: {
+              allowImportExportEverywhere: true,
+            },
+          },
+        });
+      }).not.toThrow();
     });
+
+    if (!process.env.BABEL_8_BREAKING) {
+      it("top-level allowImportExportEverywhere", () => {
+        expect(() => {
+          parseForESLint('function F() { import a from "a"; }', {
+            babelOptions: BABEL_OPTIONS,
+            allowImportExportEverywhere: true,
+          });
+        }).not.toThrow();
+      });
+    }
+
+    if (process.env.BABEL_8_BREAKING) {
+      it("return outside function with ecmaFeatures.globalReturn: true", () => {
+        parseAndAssertSame("return;", {
+          globalReturn: true,
+        });
+      });
+
+      it("return outside function with ecmaFeatures.globalReturn: false", () => {
+        expect(() =>
+          parseForESLint("return;", {
+            babelOptions: BABEL_OPTIONS,
+            ecmaVersion: { globalReturn: false },
+          }),
+        ).toThrow(new SyntaxError("'return' outside of function. (1:0)"));
+      });
+
+      it("return outside function without ecmaFeatures.globalReturn", () => {
+        expect(() =>
+          parseForESLint("return;", { babelOptions: BABEL_OPTIONS }),
+        ).toThrow(new SyntaxError("'return' outside of function. (1:0)"));
+      });
+    } else {
+      it("return outside function", () => {
+        parseAndAssertSame("return;");
+      });
+    }
+
+    if (process.env.BABEL_8_BREAKING) {
+      it("super outside method", () => {
+        expect(() => {
+          parseForESLint("function F() { super(); }", {
+            babelOptions: BABEL_OPTIONS,
+          });
+        }).toThrow(
+          /`super\(\)` is only valid inside a class constructor of a subclass\./,
+        );
+      });
+
+      it("super outside method - enabled", () => {
+        expect(() => {
+          parseForESLint("function F() { super(); }", {
+            babelOptions: {
+              ...BABEL_OPTIONS,
+              parserOpts: {
+                allowSuperOutsideMethod: true,
+              },
+            },
+          });
+        }).not.toThrow();
+      });
+    } else {
+      it("super outside method in Babel 7", () => {
+        expect(() => {
+          parseForESLint("function F() { super(); }", {
+            babelOptions: BABEL_OPTIONS,
+          });
+        }).not.toThrow();
+      });
+
+      it("super outside method - disabled", () => {
+        expect(() => {
+          parseForESLint("function F() { super(); }", {
+            babelOptions: {
+              ...BABEL_OPTIONS,
+              parserOpts: {
+                allowSuperOutsideMethod: false,
+              },
+            },
+          });
+        }).toThrow(
+          /`super\(\)` is only valid inside a class constructor of a subclass\./,
+        );
+      });
+    }
 
     it("StringLiteral", () => {
       parseAndAssertSame("");

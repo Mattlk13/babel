@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 #==============================================================================#
 #                                  SETUP                                       #
@@ -15,15 +15,15 @@ source utils/cleanup.sh
 set -x
 
 # Clone jest
-git clone --depth=1 https://github.com/facebook/jest /tmp/jest
+git clone --depth=1 https://github.com/jestjs/jest /tmp/jest
 cd /tmp/jest || exit
 
 # Update @babel/* dependencies
 bump_deps="$root/utils/bump-babel-dependencies.js"
-node "$bump_deps"
+node "$bump_deps" resolutions
 for d in ./packages/*/
 do
-  (cd "$d"; node "$bump_deps")
+  (cd "$d"; node "$bump_deps" resolutions)
 done
 
 #==============================================================================#
@@ -38,7 +38,8 @@ python --version
 #==============================================================================#
 
 startLocalRegistry "$root"/verdaccio-config.yml
-yarn install
+# yarn.lock will be modified by @babel/* bumps
+yarn install --no-immutable
 yarn dedupe '@babel/*'
 
 if [ "$BABEL_8_BREAKING" = true ] ; then
@@ -47,7 +48,13 @@ if [ "$BABEL_8_BREAKING" = true ] ; then
 
   # Jest depends on @types/babel__traverse for Babel 7, and they contain the removed Noop node
   sed -i 's/t.Noop/any/g' node_modules/@types/babel__traverse/index.d.ts
-  sed -i 's/t.Noop/any/g' node_modules/@types/babel__traverse/ts4.1/index.d.ts
+
+  # Replace isTSX with the JSX plugin
+  sed -i "s/isTSX: sourceFilePath.endsWith('x')//g" packages/jest-snapshot/src/InlineSnapshots.ts
+  sed -i "s%'TypeScript syntax plugin added by Jest snapshot',%'TypeScript syntax plugin added by Jest snapshot'],[require.resolve('@babel/plugin-syntax-jsx')%g" packages/jest-snapshot/src/InlineSnapshots.ts
+
+  # Delete once https://github.com/jestjs/jest/pull/14109 is merged
+  sed -i "s/blacklist/denylist/g" packages/babel-plugin-jest-hoist/src/index.ts
 
   node -e "
     var pkg = require('./package.json');
@@ -57,15 +64,26 @@ if [ "$BABEL_8_BREAKING" = true ] ; then
   "
 fi
 
+sed -i 's/"skipLibCheck": false,/"skipLibCheck": true,/g' tsconfig.json # Speedup
+
 yarn build
 
+# Temporarily ignore this test that is failing due to source maps changes in
+# Babel 7.21.0.
+# Re-enable it once Jest updates their snapshots to the latest Babel version.
+rm -f packages/jest-transform/src/__tests__/ScriptTransformer.test.ts
+rm -f packages/jest-transform/src/__tests__/__snapshots__/ScriptTransformer.test.ts.snap
+
+# Suppress REQUIRE_ESM warning from Node.js 22.12
+export NODE_OPTIONS="--disable-warning=ExperimentalWarning"
 # The full test suite takes about 20mins on CircleCI. We run only a few of them
 # to speed it up.
 # The goals of this e2e test are:
 #   1) Check that the typescript compilation isn't completely broken
 #   2) Make sure that we don't accidentally break jest's usage of the Babel API
-CI=true yarn test-ci-partial packages
-CI=true yarn test-ci-partial e2e/__tests__/babel
-CI=true yarn test-ci-partial e2e/__tests__/transform
+CI=true yarn jest --color --maxWorkers=2 --config jest.config.mjs packages
+CI=true yarn jest --color --maxWorkers=2 --config jest.config.mjs e2e/__tests__/babel
+CI=true yarn jest --color --maxWorkers=2 --config jest.config.mjs e2e/__tests__/transform
+unset NODE_OPTIONS
 
 cleanup

@@ -4,7 +4,7 @@ type RootOptions = {
   sourceRoot?: string;
 };
 
-type PluginOptions = {
+export type PluginOptions = {
   moduleId?: string;
   moduleIds?: boolean;
   getModuleId?: (moduleName: string) => string | null | undefined;
@@ -15,7 +15,6 @@ if (!process.env.BABEL_8_BREAKING) {
   const originalGetModuleName = getModuleName;
 
   // @ts-expect-error TS doesn't like reassigning a function.
-  // eslint-disable-next-line no-func-assign
   getModuleName = function getModuleName(
     rootOpts: RootOptions & PluginOptions,
     pluginOpts: PluginOptions,
@@ -65,7 +64,7 @@ export default function getModuleName(
       // remove sourceRoot from filename
       .replace(sourceRootReplacer, "")
       // remove extension
-      .replace(/\.(\w*?)$/, "");
+      .replace(/\.\w*$/, "");
   }
 
   // normalize path separators

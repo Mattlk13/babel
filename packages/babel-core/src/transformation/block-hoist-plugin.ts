@@ -1,7 +1,61 @@
 import traverse from "@babel/traverse";
-import Plugin from "../config/plugin";
+import type { Statement } from "@babel/types";
+import type { PluginObject } from "../config/index.ts";
+import Plugin from "../config/plugin.ts";
 
 let LOADED_PLUGIN: Plugin | void;
+
+const blockHoistPlugin: PluginObject = {
+  /**
+   * [Please add a description.]
+   *
+   * Priority:
+   *
+   *  - 0 We want this to be at the **very** bottom
+   *  - 1 Default node position
+   *  - 2 Priority over normal nodes
+   *  - 3 We want this to be at the **very** top
+   *  - 4 Reserved for the helpers used to implement module imports.
+   */
+
+  name: "internal.blockHoist",
+
+  visitor: {
+    Block: {
+      exit({ node }) {
+        node.body = performHoisting(node.body);
+      },
+    },
+    SwitchCase: {
+      exit({ node }) {
+        // In case statements, hoisting is difficult to perform correctly due to
+        // functions that are declared and referenced in different blocks.
+        // Nevertheless, hoisting the statements *inside* of each case should at
+        // least mitigate the failure cases.
+        node.consequent = performHoisting(node.consequent);
+      },
+    },
+  },
+};
+
+function performHoisting(body: Statement[]): Statement[] {
+  // Largest SMI
+  let max = 2 ** 30 - 1;
+  let hasChange = false;
+  for (let i = 0; i < body.length; i++) {
+    const n = body[i];
+    const p = priority(n);
+    if (p > max) {
+      hasChange = true;
+      break;
+    }
+    max = p;
+  }
+  if (!hasChange) return body;
+
+  // My kingdom for a stable sort!
+  return stableSort(body.slice());
+}
 
 export default function loadBlockHoistPlugin(): Plugin {
   if (!LOADED_PLUGIN) {
@@ -17,14 +71,15 @@ export default function loadBlockHoistPlugin(): Plugin {
 
   return LOADED_PLUGIN;
 }
-function priority(bodyNode) {
+
+function priority(bodyNode: Statement & { _blockHoist?: number | true }) {
   const priority = bodyNode?._blockHoist;
   if (priority == null) return 1;
   if (priority === true) return 2;
   return priority;
 }
 
-function stableSort(body) {
+function stableSort(body: Statement[]) {
   // By default, we use priorities of 0-4.
   const buckets = Object.create(null);
 
@@ -53,44 +108,3 @@ function stableSort(body) {
   }
   return body;
 }
-
-const blockHoistPlugin = {
-  /**
-   * [Please add a description.]
-   *
-   * Priority:
-   *
-   *  - 0 We want this to be at the **very** bottom
-   *  - 1 Default node position
-   *  - 2 Priority over normal nodes
-   *  - 3 We want this to be at the **very** top
-   *  - 4 Reserved for the helpers used to implement module imports.
-   */
-
-  name: "internal.blockHoist",
-
-  visitor: {
-    Block: {
-      exit({ node }) {
-        const { body } = node;
-
-        // Largest SMI
-        let max = 2 ** 30 - 1;
-        let hasChange = false;
-        for (let i = 0; i < body.length; i++) {
-          const n = body[i];
-          const p = priority(n);
-          if (p > max) {
-            hasChange = true;
-            break;
-          }
-          max = p;
-        }
-        if (!hasChange) return;
-
-        // My kingdom for a stable sort!
-        node.body = stableSort(body.slice());
-      },
-    },
-  },
-};

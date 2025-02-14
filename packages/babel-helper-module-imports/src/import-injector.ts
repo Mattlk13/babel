@@ -1,10 +1,16 @@
 import assert from "assert";
-import { numericLiteral, sequenceExpression } from "@babel/types";
+import {
+  identifier,
+  importSpecifier,
+  numericLiteral,
+  sequenceExpression,
+  isImportDeclaration,
+} from "@babel/types";
 import type * as t from "@babel/types";
 import type { NodePath, Scope, HubInterface } from "@babel/traverse";
 
-import ImportBuilder from "./import-builder";
-import isModule from "./is-module";
+import ImportBuilder from "./import-builder.ts";
+import isModule from "./is-module.ts";
 
 export type ImportOptions = {
   /**
@@ -93,8 +99,8 @@ export type ImportOptions = {
    */
   importPosition: "before" | "after";
 
-  nameHint?;
-  blockHoist?;
+  nameHint?: string;
+  blockHoist?: number;
 };
 
 /**
@@ -129,7 +135,11 @@ export default class ImportInjector {
     importPosition: "before",
   };
 
-  constructor(path: NodePath, importedSource?, opts?) {
+  constructor(
+    path: NodePath,
+    importedSource?: string,
+    opts?: Partial<ImportOptions>,
+  ) {
     const programPath = path.find(p => p.isProgram()) as NodePath<t.Program>;
 
     this._programPath = programPath;
@@ -139,11 +149,15 @@ export default class ImportInjector {
     this._defaultOpts = this._applyDefaults(importedSource, opts, true);
   }
 
-  addDefault(importedSourceIn, opts) {
+  addDefault(importedSourceIn: string, opts: Partial<ImportOptions>) {
     return this.addNamed("default", importedSourceIn, opts);
   }
 
-  addNamed(importName, importedSourceIn, opts) {
+  addNamed(
+    importName: string,
+    importedSourceIn: string,
+    opts: Partial<ImportOptions>,
+  ) {
     assert(typeof importName === "string");
 
     return this._generateImport(
@@ -152,49 +166,44 @@ export default class ImportInjector {
     );
   }
 
-  addNamespace(importedSourceIn, opts) {
+  addNamespace(importedSourceIn: string, opts: Partial<ImportOptions>) {
     return this._generateImport(
       this._applyDefaults(importedSourceIn, opts),
       null,
     );
   }
 
-  addSideEffect(importedSourceIn, opts) {
+  addSideEffect(importedSourceIn: string, opts: Partial<ImportOptions>) {
     return this._generateImport(
       this._applyDefaults(importedSourceIn, opts),
-      false,
+      void 0,
     );
   }
 
-  _applyDefaults(importedSource, opts, isInit = false) {
-    const optsList = [];
+  _applyDefaults(
+    importedSource: string | Partial<ImportOptions>,
+    opts: Partial<ImportOptions> | undefined,
+    isInit = false,
+  ) {
+    let newOpts: ImportOptions;
     if (typeof importedSource === "string") {
-      optsList.push({ importedSource });
-      optsList.push(opts);
+      newOpts = { ...this._defaultOpts, importedSource, ...opts };
     } else {
       assert(!opts, "Unexpected secondary arguments.");
-
-      optsList.push(importedSource);
+      newOpts = { ...this._defaultOpts, ...importedSource };
     }
 
-    const newOpts: ImportOptions = {
-      ...this._defaultOpts,
-    };
-    for (const opts of optsList) {
-      if (!opts) continue;
-      Object.keys(newOpts).forEach(key => {
-        if (opts[key] !== undefined) newOpts[key] = opts[key];
-      });
-
-      if (!isInit) {
-        if (opts.nameHint !== undefined) newOpts.nameHint = opts.nameHint;
-        if (opts.blockHoist !== undefined) newOpts.blockHoist = opts.blockHoist;
-      }
+    if (!isInit && opts) {
+      if (opts.nameHint !== undefined) newOpts.nameHint = opts.nameHint;
+      if (opts.blockHoist !== undefined) newOpts.blockHoist = opts.blockHoist;
     }
     return newOpts;
   }
 
-  _generateImport(opts, importName) {
+  _generateImport(
+    opts: Partial<ImportOptions>,
+    importName: string | null | undefined,
+  ) {
     const isDefault = importName === "default";
     const isNamed = !!importName && !isDefault;
     const isNamespace = importName === null;
@@ -422,33 +431,141 @@ export default class ImportInjector {
     return resultName;
   }
 
-  _insertStatements(statements, importPosition = "before", blockHoist = 3) {
-    const body = this._programPath.get("body");
-
+  _insertStatements(
+    statements: t.Statement[],
+    importPosition = "before",
+    blockHoist = 3,
+  ) {
     if (importPosition === "after") {
-      for (let i = body.length - 1; i >= 0; i--) {
-        if (body[i].isImportDeclaration()) {
-          body[i].insertAfter(statements);
-          return;
-        }
-      }
+      if (this._insertStatementsAfter(statements)) return;
     } else {
-      statements.forEach(node => {
-        node._blockHoist = blockHoist;
-      });
-
-      const targetPath = body.find(p => {
-        // @ts-expect-error todo(flow->ts): avoid mutations
-        const val = p.node._blockHoist;
-        return Number.isFinite(val) && val < 4;
-      });
-
-      if (targetPath) {
-        targetPath.insertBefore(statements);
-        return;
-      }
+      if (this._insertStatementsBefore(statements, blockHoist)) return;
     }
 
     this._programPath.unshiftContainer("body", statements);
   }
+
+  _insertStatementsBefore(statements: t.Statement[], blockHoist: number) {
+    if (
+      statements.length === 1 &&
+      isImportDeclaration(statements[0]) &&
+      isValueImport(statements[0])
+    ) {
+      const firstImportDecl = this._programPath
+        .get("body")
+        .find((p): p is NodePath<t.ImportDeclaration> => {
+          return p.isImportDeclaration() && isValueImport(p.node);
+        });
+
+      if (
+        firstImportDecl?.node.source.value === statements[0].source.value &&
+        maybeAppendImportSpecifiers(firstImportDecl.node, statements[0])
+      ) {
+        return true;
+      }
+    }
+
+    statements.forEach(node => {
+      // @ts-expect-error handle _blockHoist
+      node._blockHoist = blockHoist;
+    });
+
+    const targetPath = this._programPath.get("body").find(p => {
+      // @ts-expect-error todo(flow->ts): avoid mutations
+      const val = p.node._blockHoist;
+      return Number.isFinite(val) && val < 4;
+    });
+
+    if (targetPath) {
+      targetPath.insertBefore(statements);
+      return true;
+    }
+
+    return false;
+  }
+
+  _insertStatementsAfter(statements: t.Statement[]): boolean {
+    const statementsSet = new Set(statements);
+    const importDeclarations: Map<string, t.ImportDeclaration[]> = new Map();
+
+    for (const statement of statements) {
+      if (isImportDeclaration(statement) && isValueImport(statement)) {
+        const source = statement.source.value;
+        if (!importDeclarations.has(source)) importDeclarations.set(source, []);
+        importDeclarations.get(source).push(statement);
+      }
+    }
+
+    let lastImportPath = null;
+    for (const bodyStmt of this._programPath.get("body")) {
+      if (bodyStmt.isImportDeclaration() && isValueImport(bodyStmt.node)) {
+        lastImportPath = bodyStmt;
+
+        const source = bodyStmt.node.source.value;
+        const newImports = importDeclarations.get(source);
+        if (!newImports) continue;
+
+        for (const decl of newImports) {
+          if (!statementsSet.has(decl)) continue;
+          if (maybeAppendImportSpecifiers(bodyStmt.node, decl)) {
+            statementsSet.delete(decl);
+          }
+        }
+      }
+    }
+
+    if (statementsSet.size === 0) return true;
+
+    if (lastImportPath) lastImportPath.insertAfter(Array.from(statementsSet));
+
+    return !!lastImportPath;
+  }
+}
+
+function isValueImport(node: t.ImportDeclaration) {
+  return node.importKind !== "type" && node.importKind !== "typeof";
+}
+
+function hasNamespaceImport(node: t.ImportDeclaration) {
+  return (
+    (node.specifiers.length === 1 &&
+      node.specifiers[0].type === "ImportNamespaceSpecifier") ||
+    (node.specifiers.length === 2 &&
+      node.specifiers[1].type === "ImportNamespaceSpecifier")
+  );
+}
+
+function hasDefaultImport(node: t.ImportDeclaration) {
+  return (
+    node.specifiers.length > 0 &&
+    node.specifiers[0].type === "ImportDefaultSpecifier"
+  );
+}
+
+function maybeAppendImportSpecifiers(
+  target: t.ImportDeclaration,
+  source: t.ImportDeclaration,
+): boolean {
+  if (!target.specifiers.length) {
+    target.specifiers = source.specifiers;
+    return true;
+  }
+  if (!source.specifiers.length) return true;
+
+  if (hasNamespaceImport(target) || hasNamespaceImport(source)) return false;
+
+  if (hasDefaultImport(source)) {
+    if (hasDefaultImport(target)) {
+      source.specifiers[0] = importSpecifier(
+        source.specifiers[0].local,
+        identifier("default"),
+      );
+    } else {
+      target.specifiers.unshift(source.specifiers.shift());
+    }
+  }
+
+  target.specifiers.push(...source.specifiers);
+
+  return true;
 }

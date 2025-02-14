@@ -3,7 +3,7 @@ import vm from "vm";
 import { fileURLToPath } from "url";
 import path from "path";
 
-import transformCommonJS from "..";
+import transformCommonJS from "../lib/index.js";
 
 test("Re-export doesn't overwrite __esModule flag", function () {
   let code = 'export * from "./dep";';
@@ -22,7 +22,7 @@ test("Re-export doesn't overwrite __esModule flag", function () {
   };
   context.exports = context.module.exports;
 
-  code = babel.transform(code, {
+  code = babel.transformSync(code, {
     cwd: path.dirname(fileURLToPath(import.meta.url)),
     plugins: [[transformCommonJS, { loose: true }]],
     ast: false,

@@ -1,10 +1,13 @@
-import type * as t from "@babel/types";
-import type { NodePath } from "@babel/traverse";
+import type { NodePath, types as t } from "@babel/core";
 
-import { translateEnumValues } from "./enum";
+import { translateEnumValues } from "./enum.ts";
 
+export const EXPORTED_CONST_ENUMS_IN_NAMESPACE =
+  new WeakSet<t.TSEnumDeclaration>();
+
+export type NodePathConstEnum = NodePath<t.TSEnumDeclaration & { const: true }>;
 export default function transpileConstEnum(
-  path: NodePath<t.TSEnumDeclaration & { const: true }>,
+  path: NodePathConstEnum,
   t: typeof import("@babel/types"),
 ) {
   const { name } = path.node.id;
@@ -15,16 +18,20 @@ export default function transpileConstEnum(
     isExported = path.parent.body.some(
       stmt =>
         t.isExportNamedDeclaration(stmt) &&
+        stmt.exportKind !== "type" &&
         !stmt.source &&
         stmt.specifiers.some(
-          spec => t.isExportSpecifier(spec) && spec.local.name === name,
+          spec =>
+            t.isExportSpecifier(spec) &&
+            spec.exportKind !== "type" &&
+            spec.local.name === name,
         ),
     );
   }
 
-  const entries = translateEnumValues(path, t);
+  const { enumValues: entries } = translateEnumValues(path, t);
 
-  if (isExported) {
+  if (isExported || EXPORTED_CONST_ENUMS_IN_NAMESPACE.has(path.node)) {
     const obj = t.objectExpression(
       entries.map(([name, value]) =>
         t.objectProperty(
@@ -47,7 +54,9 @@ export default function transpileConstEnum(
       );
     } else {
       path.replaceWith(
-        t.variableDeclaration("var", [t.variableDeclarator(path.node.id, obj)]),
+        t.variableDeclaration(process.env.BABEL_8_BREAKING ? "const" : "var", [
+          t.variableDeclarator(path.node.id, obj),
+        ]),
       );
       path.scope.registerDeclaration(path);
     }

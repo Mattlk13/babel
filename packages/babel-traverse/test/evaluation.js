@@ -1,5 +1,7 @@
-import traverse from "../lib";
 import { parse } from "@babel/parser";
+
+import _traverse from "../lib/index.js";
+const traverse = _traverse.default || _traverse;
 
 function getPath(code) {
   const ast = parse(code);
@@ -66,6 +68,14 @@ describe("evaluation", function () {
     expect(getPath("0 && x === 'y'").get("body")[0].evaluate().value).toBe(0);
   });
 
+  it("should handle ??", function () {
+    expect(getPath("null ?? 42").get("body")[0].evaluate().value).toBe(42);
+    expect(getPath("void 0 ?? 42").get("body")[0].evaluate().value).toBe(42);
+    expect(getPath("0 ?? 42").get("body")[0].evaluate().value).toBe(0);
+    expect(getPath("x ?? 42").get("body")[0].evaluate().confident).toBe(false);
+    expect(getPath("42 ?? x === 'y'").get("body")[0].evaluate().value).toBe(42);
+  });
+
   it("should work with repeated, indeterminate identifiers", function () {
     expect(
       getPath("var num = foo(); (num > 0 && num < 100);")
@@ -90,12 +100,27 @@ describe("evaluation", function () {
     ).toBe(false);
   });
 
-  it("should evaluate template literals", function () {
-    expect(
-      getPath("var x = 8; var y = 1; var z = `value is ${x >>> y}`")
-        .get("body.2.declarations.0.init")
-        .evaluate().value,
-    ).toBe("value is 4");
+  describe("template literals", function () {
+    it("should evaluate template literals", function () {
+      expect(
+        getPath("var x = 8; var y = 1; var z = `value is ${x >>> y}`")
+          .get("body.2.declarations.0.init")
+          .evaluate().value,
+      ).toBe("value is 4");
+    });
+
+    it("should evaluate String.raw tags", function () {
+      expect(
+        getPath("String.raw`a\\n${1}\\u`;").get("body.0.expression").evaluate()
+          .value,
+      ).toBe("a\\n1\\u");
+    });
+
+    addDeoptTest(
+      "a`x${b}y`",
+      "TaggedTemplateExpression",
+      "TaggedTemplateExpression",
+    );
   });
 
   it("should evaluate member expressions", function () {
@@ -104,6 +129,16 @@ describe("evaluation", function () {
         .get("body.0.declarations.0.init")
         .evaluate().value,
     ).toBe(3);
+    expect(
+      getPath("var x = 'hello world'[6]")
+        .get("body.0.declarations.0.init")
+        .evaluate().value,
+    ).toBe("w");
+    expect(
+      getPath("var length = 1; var x = 'abc'[length];")
+        .get("body.1.declarations.0.init")
+        .evaluate().value,
+    ).toBe("b");
     const member_expr = getPath(
       "var x = Math.min(2,Math.max(3,4));var y = Math.random();",
     );
@@ -115,6 +150,69 @@ describe("evaluation", function () {
       .evaluate();
     expect(eval_member_expr.value).toBe(2);
     expect(eval_invalid_call.confident).toBe(false);
+  });
+
+  it("should not evaluate inherited methods", function () {
+    const path = getPath("Math.hasOwnProperty('min')");
+    const evalResult = path.get("body.0.expression").evaluate();
+    expect(evalResult.confident).toBe(false);
+  });
+
+  it("should evaluate global call expressions", function () {
+    expect(
+      getPath("isFinite(1);").get("body.0.expression").evaluate().value,
+    ).toBe(true);
+
+    expect(
+      getPath("isFinite(Infinity);").get("body.0.expression").evaluate().value,
+    ).toBe(false);
+
+    expect(
+      getPath("isNaN(NaN);").get("body.0.expression").evaluate().value,
+    ).toBe(true);
+
+    expect(getPath("isNaN(1);").get("body.0.expression").evaluate().value).toBe(
+      false,
+    );
+
+    expect(
+      getPath("parseFloat('1.1');").get("body.0.expression").evaluate().value,
+    ).toBe(1.1);
+
+    expect(
+      getPath("parseFloat('1');").get("body.0.expression").evaluate().value,
+    ).toBe(1);
+
+    expect(
+      getPath("encodeURI('x 1');").get("body.0.expression").evaluate().value,
+    ).toBe("x%201");
+
+    expect(
+      getPath("decodeURI('x%201');").get("body.0.expression").evaluate().value,
+    ).toBe("x 1");
+
+    expect(
+      getPath("encodeURIComponent('?x=1');").get("body.0.expression").evaluate()
+        .value,
+    ).toBe("%3Fx%3D1");
+
+    expect(
+      getPath("decodeURIComponent('%3Fx%3D1');")
+        .get("body.0.expression")
+        .evaluate().value,
+    ).toBe("?x=1");
+
+    if (process.env.BABEL_8_BREAKING) {
+      // eslint-disable-next-line jest/no-conditional-expect
+      expect(
+        getPath("btoa('babel');").get("body.0.expression").evaluate().value,
+      ).toBe("YmFiZWw=");
+
+      // eslint-disable-next-line jest/no-conditional-expect
+      expect(
+        getPath("atob('YmFiZWw=');").get("body.0.expression").evaluate().value,
+      ).toBe("babel");
+    }
   });
 
   it("should not deopt vars in different scope", function () {

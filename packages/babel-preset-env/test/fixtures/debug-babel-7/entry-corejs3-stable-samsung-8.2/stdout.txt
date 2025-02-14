@@ -8,23 +8,29 @@ Using targets:
 Using modules transform: auto
 
 Using plugins:
-  proposal-class-static-block { samsung }
-  proposal-private-property-in-object { samsung }
-  proposal-class-properties { samsung }
-  proposal-private-methods { samsung }
-  proposal-numeric-separator { samsung < 11 }
-  proposal-logical-assignment-operators { samsung }
-  proposal-nullish-coalescing-operator { samsung < 13 }
-  proposal-optional-chaining { samsung }
-  proposal-json-strings { samsung < 9 }
-  proposal-optional-catch-binding { samsung < 9 }
+  transform-duplicate-named-capturing-groups-regex { samsung }
+  transform-regexp-modifiers { samsung }
+  transform-unicode-sets-regex { samsung }
+  transform-class-static-block { samsung < 17 }
+  transform-private-property-in-object { samsung < 16 }
+  transform-class-properties { samsung < 11 }
+  transform-private-methods { samsung < 14 }
+  transform-numeric-separator { samsung < 11 }
+  transform-logical-assignment-operators { samsung < 14 }
+  transform-nullish-coalescing-operator { samsung < 13 }
+  transform-optional-chaining { samsung < 16 }
+  transform-json-strings { samsung < 9 }
+  transform-optional-catch-binding { samsung < 9 }
   syntax-async-generators
   syntax-object-rest-spread
-  proposal-unicode-property-regex { samsung < 9 }
+  transform-unicode-property-regex { samsung < 9 }
   transform-named-capturing-groups-regex { samsung < 9 }
-  proposal-export-namespace-from { samsung < 11.0 }
+  transform-export-namespace-from { samsung < 11.0 }
   transform-modules-commonjs
-  proposal-dynamic-import
+  transform-dynamic-import
+  syntax-top-level-await
+  syntax-import-meta
+  syntax-import-attributes
 corejs3: `DEBUG` option
 
 Using targets: {
@@ -50,9 +56,11 @@ The corejs3 polyfill entry has been replaced with the following polyfills:
   es.promise.finally { "samsung":"8.2" }
   es.regexp.constructor { "samsung":"8.2" }
   es.regexp.exec { "samsung":"8.2" }
+  es.regexp.flags { "samsung":"8.2" }
   es.string.replace { "samsung":"8.2" }
   es.string.trim-end { "samsung":"8.2" }
   es.string.trim-start { "samsung":"8.2" }
+  es.typed-array.set { "samsung":"8.2" }
   es.typed-array.sort { "samsung":"8.2" }
   web.dom-collections.iterator { "samsung":"8.2" }
   web.immediate { "samsung":"8.2" }

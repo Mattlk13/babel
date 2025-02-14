@@ -1,6 +1,6 @@
 // This file contains methods responsible for introspecting the current path for certain values.
 
-import type NodePath from "./index";
+import type NodePath from "./index.ts";
 import {
   STATEMENT_OR_BLOCK_KEYS,
   VISITOR_KEYS,
@@ -29,48 +29,59 @@ export function matchesPattern(
   return _matchesPattern(this.node, pattern, allowPartial);
 }
 
-/**
- * Check whether we have the input `key`. If the `key` references an array then we check
- * if the array has any items, otherwise we just check if it's falsy.
- */
-
-export function has(this: NodePath, key: string): boolean {
-  const val = this.node && this.node[key];
-  if (val && Array.isArray(val)) {
-    return !!val.length;
-  } else {
-    return !!val;
-  }
+if (!process.env.BABEL_8_BREAKING && !USE_ESM) {
+  /**
+   * Check whether we have the input `key`. If the `key` references an array then we check
+   * if the array has any items, otherwise we just check if it's falsy.
+   */
+  // eslint-disable-next-line no-restricted-globals
+  exports.has = function has<N extends t.Node>(
+    this: NodePath<N>,
+    key: keyof N,
+  ): boolean {
+    const val = (this.node as N)?.[key];
+    if (val && Array.isArray(val)) {
+      return !!val.length;
+    } else {
+      return !!val;
+    }
+  };
 }
-
-/**
- * Description
- */
 
 export function isStatic(this: NodePath): boolean {
   return this.scope.isStatic(this.node);
 }
 
-/**
- * Alias of `has`.
- */
+if (!process.env.BABEL_8_BREAKING && !USE_ESM) {
+  /**
+   * Alias of `has`.
+   */
+  // eslint-disable-next-line no-restricted-globals
+  exports.is = exports.has;
 
-export const is = has;
+  /**
+   * Opposite of `has`.
+   */
+  // eslint-disable-next-line no-restricted-globals
+  exports.isnt = function isnt<N extends t.Node>(
+    this: NodePath<N>,
+    key: keyof N,
+  ): boolean {
+    // @ts-expect-error Babel 7
+    return !this.has(key);
+  };
 
-/**
- * Opposite of `has`.
- */
-
-export function isnt(this: NodePath, key: string): boolean {
-  return !this.has(key);
-}
-
-/**
- * Check whether the path node `key` strict equals `value`.
- */
-
-export function equals(this: NodePath, key: string, value): boolean {
-  return this.node[key] === value;
+  /**
+   * Check whether the path node `key` strict equals `value`.
+   */
+  // eslint-disable-next-line no-restricted-globals
+  exports.equals = function equals<N extends t.Node>(
+    this: NodePath<N>,
+    key: keyof N,
+    value: any,
+  ): boolean {
+    return (this.node as N)[key] === value;
+  };
 }
 
 /**
@@ -135,10 +146,10 @@ export function isCompletionRecord(
   let first = true;
 
   do {
-    const container = path.container;
+    const { type, container } = path;
 
     // we're in a function so can't be a completion record
-    if (path.isFunction() && !first) {
+    if (!first && (path.isFunction() || type === "StaticBlock")) {
       return !!allowInsideFunction;
     }
 
@@ -149,7 +160,11 @@ export function isCompletionRecord(
     if (Array.isArray(container) && path.key !== container.length - 1) {
       return false;
     }
-  } while ((path = path.parentPath) && !path.isProgram());
+  } while (
+    (path = path.parentPath) &&
+    !path.isProgram() &&
+    !path.isDoExpression()
+  );
 
   return true;
 }
@@ -162,7 +177,7 @@ export function isCompletionRecord(
 export function isStatementOrBlock(this: NodePath): boolean {
   if (
     this.parentPath.isLabeledStatement() ||
-    isBlockStatement(this.container)
+    isBlockStatement(this.container as t.Node)
   ) {
     return false;
   } else {
@@ -175,16 +190,18 @@ export function isStatementOrBlock(this: NodePath): boolean {
  */
 
 export function referencesImport(
-  this: NodePath<t.Expression>,
+  this: NodePath,
   moduleSource: string,
   importName: string,
 ): boolean {
   if (!this.isReferencedIdentifier()) {
     if (
-      (this.isMemberExpression() || this.isOptionalMemberExpression()) &&
-      (this.node.computed
-        ? isStringLiteral(this.node.property, { value: importName })
-        : (this.node.property as t.Identifier).name === importName)
+      (this.isJSXMemberExpression() &&
+        this.node.property.name === importName) ||
+      ((this.isMemberExpression() || this.isOptionalMemberExpression()) &&
+        (this.node.computed
+          ? isStringLiteral(this.node.property, { value: importName })
+          : (this.node.property as t.Identifier).name === importName))
     ) {
       const object = (
         this as NodePath<t.MemberExpression | t.OptionalMemberExpression>
@@ -243,15 +260,23 @@ export function getSource(this: NodePath): string {
   return "";
 }
 
-export function willIMaybeExecuteBefore(this: NodePath, target): boolean {
+export function willIMaybeExecuteBefore(
+  this: NodePath,
+  target: NodePath,
+): boolean {
   return this._guessExecutionStatusRelativeTo(target) !== "after";
 }
 
-function getOuterFunction(path) {
-  return (path.scope.getFunctionParent() || path.scope.getProgramParent()).path;
+function getOuterFunction(path: NodePath) {
+  return path.isProgram()
+    ? path
+    : (
+        path.parentPath.scope.getFunctionParent() ||
+        path.parentPath.scope.getProgramParent()
+      ).path;
 }
 
-function isExecutionUncertain(type, key) {
+function isExecutionUncertain(type: t.Node["type"], key: string) {
   switch (type) {
     // a && FOO
     // a || FOO
@@ -300,7 +325,7 @@ function isExecutionUncertain(type, key) {
   }
 }
 
-function isExecutionUncertainInList(paths, maxIndex) {
+function isExecutionUncertainInList(paths: NodePath[], maxIndex: number) {
   for (let i = 0; i < maxIndex; i++) {
     const path = paths[i];
     if (isExecutionUncertain(path.parent.type, path.parentKey)) {
@@ -310,11 +335,22 @@ function isExecutionUncertainInList(paths, maxIndex) {
   return false;
 }
 
-// TODO (Babel 8)
+// TODO(Babel 8)
 // This can be { before: boolean, after: boolean, unknown: boolean }.
 // This allows transforms like the tdz one to treat cases when the status
 // is both before and unknown/after like if it were before.
 type RelativeExecutionStatus = "before" | "after" | "unknown";
+
+// Used to avoid infinite recursion in cases like
+//   function f() { if (false) f(); }
+//   f();
+// It also works with indirect recursion.
+const SYMBOL_CHECKING = Symbol();
+
+type ExecutionStatusCache = Map<
+  t.Node,
+  Map<t.Node, RelativeExecutionStatus | typeof SYMBOL_CHECKING>
+>;
 
 /**
  * Given a `target` check the execution status of it relative to the current path.
@@ -327,29 +363,39 @@ export function _guessExecutionStatusRelativeTo(
   this: NodePath,
   target: NodePath,
 ): RelativeExecutionStatus {
+  return _guessExecutionStatusRelativeToCached(this, target, new Map());
+}
+
+function _guessExecutionStatusRelativeToCached(
+  base: NodePath,
+  target: NodePath,
+  cache: ExecutionStatusCache,
+): RelativeExecutionStatus {
   // check if the two paths are in different functions, we can't track execution of these
   const funcParent = {
-    this: getOuterFunction(this),
+    this: getOuterFunction(base),
     target: getOuterFunction(target),
   };
 
   // here we check the `node` equality as sometimes we may have different paths for the
   // same node due to path thrashing
   if (funcParent.target.node !== funcParent.this.node) {
-    return this._guessExecutionStatusRelativeToDifferentFunctions(
+    return _guessExecutionStatusRelativeToDifferentFunctionsCached(
+      base,
       funcParent.target,
+      cache,
     );
   }
 
   const paths = {
     target: target.getAncestry(),
-    this: this.getAncestry(),
+    this: base.getAncestry(),
   };
 
   // If this is an ancestor of the target path,
   // e.g. f(g); where this is f and target is g.
-  if (paths.target.indexOf(this) >= 0) return "after";
-  if (paths.this.indexOf(target) >= 0) return "before";
+  if (paths.target.includes(base)) return "after";
+  if (paths.this.includes(target)) return "before";
 
   // get ancestor where the branches intersect
   let commonPath;
@@ -397,26 +443,25 @@ export function _guessExecutionStatusRelativeTo(
   // otherwise we're associated by a parent node, check which key comes before the other
   const keys = VISITOR_KEYS[commonPath.type];
   const keyPosition = {
-    this: keys.indexOf(divergence.this.parentKey as string),
-    target: keys.indexOf(divergence.target.parentKey as string),
+    this: keys.indexOf(divergence.this.parentKey),
+    target: keys.indexOf(divergence.target.parentKey),
   };
   return keyPosition.target > keyPosition.this ? "before" : "after";
 }
 
-// Used to avoid infinite recursion in cases like
-//   function f() { if (false) f(); }
-//   f();
-// It also works with indirect recursion.
-const executionOrderCheckedNodes = new WeakSet();
-
-export function _guessExecutionStatusRelativeToDifferentFunctions(
-  this: NodePath,
+function _guessExecutionStatusRelativeToDifferentFunctionsInternal(
+  base: NodePath,
   target: NodePath,
+  cache: ExecutionStatusCache,
 ): RelativeExecutionStatus {
-  if (
-    !target.isFunctionDeclaration() ||
-    target.parentPath.isExportDeclaration()
-  ) {
+  if (!target.isFunctionDeclaration()) {
+    if (
+      _guessExecutionStatusRelativeToCached(base, target, cache) === "before"
+    ) {
+      return "before";
+    }
+    return "unknown";
+  } else if (target.parentPath.isExportDeclaration()) {
     return "unknown";
   }
 
@@ -446,13 +491,7 @@ export function _guessExecutionStatusRelativeToDifferentFunctions(
       return "unknown";
     }
 
-    // Prevent infinite loops in recursive functions
-    if (executionOrderCheckedNodes.has(path.node)) continue;
-    executionOrderCheckedNodes.add(path.node);
-
-    const status = this._guessExecutionStatusRelativeTo(path);
-
-    executionOrderCheckedNodes.delete(path.node);
+    const status = _guessExecutionStatusRelativeToCached(base, path, cache);
 
     if (allStatus && allStatus !== status) {
       return "unknown";
@@ -464,21 +503,54 @@ export function _guessExecutionStatusRelativeToDifferentFunctions(
   return allStatus;
 }
 
+function _guessExecutionStatusRelativeToDifferentFunctionsCached(
+  base: NodePath,
+  target: NodePath,
+  cache: ExecutionStatusCache,
+): RelativeExecutionStatus {
+  let nodeMap = cache.get(base.node);
+  let cached;
+
+  if (!nodeMap) {
+    cache.set(base.node, (nodeMap = new Map()));
+  } else if ((cached = nodeMap.get(target.node))) {
+    if (cached === SYMBOL_CHECKING) {
+      return "unknown";
+    }
+    return cached;
+  }
+
+  nodeMap.set(target.node, SYMBOL_CHECKING);
+
+  const result = _guessExecutionStatusRelativeToDifferentFunctionsInternal(
+    base,
+    target,
+    cache,
+  );
+
+  nodeMap.set(target.node, result);
+  return result;
+}
+
 /**
  * Resolve a "pointer" `NodePath` to it's absolute path.
  */
-export function resolve(this: NodePath, dangerous?, resolved?) {
-  return this._resolve(dangerous, resolved) || this;
+export function resolve(
+  this: NodePath,
+  dangerous?: boolean,
+  resolved?: NodePath[],
+) {
+  return _resolve.call(this, dangerous, resolved) || this;
 }
 
 export function _resolve(
   this: NodePath,
-  dangerous?,
-  resolved?,
+  dangerous?: boolean,
+  resolved?: NodePath[],
 ): NodePath | undefined | null {
   // detect infinite recursion
   // todo: possibly have a max length on this just to be safe
-  if (resolved && resolved.indexOf(this) >= 0) return;
+  if (resolved?.includes(this)) return;
 
   // we store all the paths we've "resolved" in this array to prevent infinite recursion
   resolved = resolved || [];
@@ -545,7 +617,7 @@ export function _resolve(
   }
 }
 
-export function isConstantExpression(this: NodePath) {
+export function isConstantExpression(this: NodePath): boolean {
   if (this.isIdentifier()) {
     const binding = this.scope.getBinding(this.node.name);
     if (!binding) return false;
@@ -575,9 +647,29 @@ export function isConstantExpression(this: NodePath) {
   }
 
   if (this.isBinaryExpression()) {
+    const { operator } = this.node;
     return (
+      operator !== "in" &&
+      operator !== "instanceof" &&
       this.get("left").isConstantExpression() &&
       this.get("right").isConstantExpression()
+    );
+  }
+
+  if (this.isMemberExpression()) {
+    return (
+      !this.node.computed &&
+      this.get("object").isIdentifier({ name: "Symbol" }) &&
+      !this.scope.hasBinding("Symbol", { noGlobals: true })
+    );
+  }
+
+  if (this.isCallExpression()) {
+    return (
+      this.node.arguments.length === 1 &&
+      this.get("callee").matchesPattern("Symbol.for") &&
+      !this.scope.hasBinding("Symbol", { noGlobals: true }) &&
+      this.get("arguments")[0].isStringLiteral()
     );
   }
 
@@ -592,8 +684,6 @@ export function isInStrictMode(this: NodePath) {
 
     if (path.isClass()) return true;
 
-    if (!path.isProgram() && !path.isFunction()) return false;
-
     if (
       path.isArrowFunctionExpression() &&
       !path.get("body").isBlockStatement()
@@ -601,9 +691,17 @@ export function isInStrictMode(this: NodePath) {
       return false;
     }
 
-    const body: t.BlockStatement | t.Program = path.isFunction()
-      ? (path.node.body as t.BlockStatement)
-      : (path.node as t.Program);
+    let body: t.BlockStatement | t.Program;
+    if (path.isFunction()) {
+      body = path.node.body as t.BlockStatement;
+    } else if (path.isProgram()) {
+      // @ts-expect-error TODO: TS thinks that `path` here cannot be
+      // Program due to the `isProgram()` check at the beginning of
+      // the function
+      body = path.node;
+    } else {
+      return false;
+    }
 
     for (const directive of body.directives) {
       if (directive.value.value === "use strict") {

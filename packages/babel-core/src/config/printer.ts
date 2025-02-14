@@ -5,7 +5,7 @@ import type { Handler } from "gensync";
 import type {
   OptionsAndDescriptors,
   UnloadedDescriptor,
-} from "./config-descriptors";
+} from "./config-descriptors.ts";
 
 // todo: Use flow enums when @babel/transform-flow-types supports it
 export const ChainFormatter = {
@@ -15,7 +15,7 @@ export const ChainFormatter = {
 
 type PrintableConfig = {
   content: OptionsAndDescriptors;
-  type: typeof ChainFormatter[keyof typeof ChainFormatter];
+  type: (typeof ChainFormatter)[keyof typeof ChainFormatter];
   callerName: string | undefined | null;
   filepath: string | undefined | null;
   index: number | undefined | null;
@@ -24,7 +24,7 @@ type PrintableConfig = {
 
 const Formatter = {
   title(
-    type: typeof ChainFormatter[keyof typeof ChainFormatter],
+    type: (typeof ChainFormatter)[keyof typeof ChainFormatter],
     callerName?: string | null,
     filepath?: string | null,
   ): string {
@@ -68,10 +68,10 @@ const Formatter = {
   },
 };
 
-function descriptorToConfig(
-  d: UnloadedDescriptor,
-): string | {} | Array<unknown> {
-  let name = d.file?.request;
+function descriptorToConfig<API>(
+  d: UnloadedDescriptor<API>,
+): object | string | [string, unknown] | [string, unknown, string] {
+  let name: object | string = d.file?.request;
   if (name == null) {
     if (typeof d.value === "object") {
       name = d.value;
@@ -79,7 +79,7 @@ function descriptorToConfig(
       // If the unloaded descriptor is a function, i.e. `plugins: [ require("my-plugin") ]`,
       // we print the first 50 characters of the function source code and hopefully we can see
       // `name: 'my-plugin'` in the source
-      name = `[Function: ${d.value.toString().substr(0, 50)} ... ]`;
+      name = `[Function: ${d.value.toString().slice(0, 50)} ... ]`;
     }
   }
   if (name == null) {
@@ -98,7 +98,7 @@ export class ConfigPrinter {
   _stack: Array<PrintableConfig> = [];
   configure(
     enabled: boolean,
-    type: typeof ChainFormatter[keyof typeof ChainFormatter],
+    type: (typeof ChainFormatter)[keyof typeof ChainFormatter],
     {
       callerName,
       filepath,

@@ -1,28 +1,40 @@
-import * as t from "../../..";
+import * as t from "../../../lib/index.js";
+import { describeBabel8, describeBabel7 } from "$repo-utils";
 
 describe("builders", function () {
   describe("typescript", function () {
-    describe("tsTypeParameter", function () {
+    describeBabel8("tsTypeParameter", function () {
       it("accept name as argument for tsTypeParameter", function () {
         const tsTypeParameter = t.tsTypeParameter(
           t.tsTypeReference(t.identifier("bar")),
           t.tsTypeReference(t.identifier("baz")),
-          !process.env.BABEL_8_BREAKING ? "foo" : t.identifier("foo"),
+          t.identifier("foo"),
         );
-        expect(tsTypeParameter).toMatchSnapshot({
-          name: expect.anything(),
-        });
-        // TODO(babel-8): move this check to the snapshot
-        expect(tsTypeParameter).toEqual(
-          expect.objectContaining({
-            name: !process.env.BABEL_8_BREAKING
-              ? "foo"
-              : expect.objectContaining({
-                  name: "foo",
-                  type: "Identifier",
-                }),
-          }),
-        );
+        expect(tsTypeParameter).toMatchInlineSnapshot(`
+          Object {
+            "constraint": Object {
+              "type": "TSTypeReference",
+              "typeArguments": null,
+              "typeName": Object {
+                "name": "bar",
+                "type": "Identifier",
+              },
+            },
+            "default": Object {
+              "type": "TSTypeReference",
+              "typeArguments": null,
+              "typeName": Object {
+                "name": "baz",
+                "type": "Identifier",
+              },
+            },
+            "name": Object {
+              "name": "foo",
+              "type": "Identifier",
+            },
+            "type": "TSTypeParameter",
+          }
+        `);
       });
       it("throws when name is missing", function () {
         expect(() => {
@@ -31,10 +43,47 @@ describe("builders", function () {
             t.tsTypeReference(t.identifier("baz")),
           );
         }).toThrow(
-          !process.env.BABEL_8_BREAKING
-            ? "Property name expected type of string but got null"
-            : 'Property name of TSTypeParameter expected node to be of a type ["Identifier"] but instead got undefined',
+          'Property name of TSTypeParameter expected node to be of a type ["Identifier"] but instead got undefined',
         );
+      });
+    });
+    describeBabel7("tsTypeParameter - Babel 7", function () {
+      it("accept name as argument for tsTypeParameter in Babel 7", function () {
+        const tsTypeParameter = t.tsTypeParameter(
+          t.tsTypeReference(t.identifier("bar")),
+          t.tsTypeReference(t.identifier("baz")),
+          "foo",
+        );
+        expect(tsTypeParameter).toMatchInlineSnapshot(`
+            Object {
+              "constraint": Object {
+                "type": "TSTypeReference",
+                "typeName": Object {
+                  "name": "bar",
+                  "type": "Identifier",
+                },
+                "typeParameters": null,
+              },
+              "default": Object {
+                "type": "TSTypeReference",
+                "typeName": Object {
+                  "name": "baz",
+                  "type": "Identifier",
+                },
+                "typeParameters": null,
+              },
+              "name": "foo",
+              "type": "TSTypeParameter",
+            }
+          `);
+      });
+      it("throws when name is missing in Babel 7", function () {
+        expect(() => {
+          t.tsTypeParameter(
+            t.tsTypeReference(t.identifier("bar")),
+            t.tsTypeReference(t.identifier("baz")),
+          );
+        }).toThrow("Property name expected type of string but got undefined");
       });
     });
   });

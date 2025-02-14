@@ -3,9 +3,9 @@ import {
   isFunction,
   isClass,
   isAssignmentExpression,
-} from "../validators/generated";
-import { expressionStatement } from "../builders/generated";
-import type * as t from "..";
+} from "../validators/generated/index.ts";
+import { expressionStatement } from "../builders/generated/index.ts";
+import type * as t from "../index.ts";
 
 export default toStatement as {
   (node: t.AssignmentExpression, ignore?: boolean): t.ExpressionStatement;
@@ -33,10 +33,10 @@ function toStatement(node: t.Node, ignore?: boolean): t.Statement | false {
 
   if (isClass(node)) {
     mustHaveId = true;
-    newType = "ClassDeclaration";
+    newType = "ClassDeclaration" as const;
   } else if (isFunction(node)) {
     mustHaveId = true;
-    newType = "FunctionDeclaration";
+    newType = "FunctionDeclaration" as const;
   } else if (isAssignmentExpression(node)) {
     return expressionStatement(node);
   }
@@ -54,6 +54,7 @@ function toStatement(node: t.Node, ignore?: boolean): t.Statement | false {
     }
   }
 
+  // @ts-expect-error manipulating node.type
   node.type = newType;
 
   // @ts-expect-error todo(flow->ts) refactor to avoid type unsafe mutations like reassigning node type above

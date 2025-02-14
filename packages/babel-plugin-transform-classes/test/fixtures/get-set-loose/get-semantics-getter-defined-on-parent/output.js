@@ -2,8 +2,7 @@
 
 let Base = /*#__PURE__*/function () {
   function Base() {}
-
-  babelHelpers.createClass(Base, [{
+  return babelHelpers.createClass(Base, [{
     key: "test",
     get: function () {
       // This is incorrect according to the spec,
@@ -12,25 +11,18 @@ let Base = /*#__PURE__*/function () {
       return 1;
     }
   }]);
-  return Base;
 }();
-
 let Obj = /*#__PURE__*/function (_Base) {
-  babelHelpers.inheritsLoose(Obj, _Base);
-
   function Obj() {
     return _Base.apply(this, arguments) || this;
   }
-
+  babelHelpers.inheritsLoose(Obj, _Base);
   var _proto = Obj.prototype;
-
   _proto.get = function get() {
     return _Base.prototype.test;
   };
-
   return Obj;
 }(Base);
-
 Object.defineProperty(Obj.prototype, 'test', {
   value: 2,
   writable: true,

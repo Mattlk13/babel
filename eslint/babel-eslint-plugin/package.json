@@ -1,11 +1,15 @@
 {
   "name": "@babel/eslint-plugin",
-  "version": "7.14.5",
+  "version": "7.25.9",
   "description": "Companion rules for @babel/eslint-parser",
-  "main": "./lib/index.js",
-  "type": "commonjs",
+  "main": "./lib/index.cjs",
+  "type": "module",
+  "types": "./types.d.cts",
   "exports": {
-    ".": "./lib/index.js",
+    ".": {
+      "default": "./lib/index.cjs",
+      "types": "./types.d.cts"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -33,14 +37,28 @@
   },
   "homepage": "https://babel.dev/",
   "peerDependencies": {
-    "@babel/eslint-parser": ">=7.11.0",
-    "eslint": ">=7.5.0"
+    "@babel/eslint-parser": "^7.11.0",
+    "eslint": "^7.5.0 || ^8.0.0 || ^9.0.0"
   },
   "dependencies": {
     "eslint-rule-composer": "^0.3.0"
   },
   "devDependencies": {
     "clone-deep": "^4.0.1",
-    "eslint": "^7.27.0"
+    "eslint": "^9.7.0"
+  },
+  "conditions": {
+    "BABEL_8_BREAKING": [
+      {
+        "engines": {
+          "node": "^18.20.0 || ^20.17.0 || >=22.8.0"
+        },
+        "peerDependencies": {
+          "@babel/eslint-parser": "^7.11.0",
+          "eslint": "^8.9.0 || ^9.0.0"
+        }
+      },
+      {}
+    ]
   }
 }

@@ -1,5 +1,6 @@
 export const TargetNames = {
   node: "node",
+  deno: "deno",
   chrome: "chrome",
   opera: "opera",
   edge: "edge",
@@ -11,4 +12,5 @@ export const TargetNames = {
   electron: "electron",
   samsung: "samsung",
   rhino: "rhino",
+  opera_mobile: "opera_mobile",
 };

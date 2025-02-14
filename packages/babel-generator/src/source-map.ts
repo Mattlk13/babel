@@ -1,57 +1,95 @@
-import sourceMap from "source-map";
+import {
+  GenMapping,
+  maybeAddMapping,
+  setSourceContent,
+  allMappings,
+  toEncodedMap,
+  toDecodedMap,
+} from "@jridgewell/gen-mapping";
+
+import type {
+  EncodedSourceMap,
+  DecodedSourceMap,
+  Mapping,
+} from "@jridgewell/gen-mapping";
+
+import {
+  type SourceMapInput,
+  originalPositionFor,
+  TraceMap,
+} from "@jridgewell/trace-mapping";
 
 /**
  * Build a sourcemap.
  */
 
 export default class SourceMap {
-  private _cachedMap: sourceMap.SourceMapGenerator | null;
-  private _code: any;
-  private _opts: any;
-  private _rawMappings: any[];
-  private _lastGenLine: number;
-  private _lastSourceLine: number;
-  private _lastSourceColumn: number;
-  constructor(opts, code) {
-    this._cachedMap = null;
-    this._code = code;
-    this._opts = opts;
-    this._rawMappings = [];
+  private _map: GenMapping;
+  private _rawMappings: Mapping[] | undefined;
+  private _sourceFileName: string | undefined;
+
+  // Any real line is > 0, so init to 0 is fine.
+  private _lastGenLine = 0;
+  private _lastSourceLine = 0;
+
+  // Source columns can be 0, but we only check in unison with sourceLine, which
+  // inits to an impossible value. So init to 0 is fine.
+  private _lastSourceColumn = 0;
+
+  public _inputMap: TraceMap;
+
+  constructor(
+    opts: {
+      sourceFileName?: string;
+      sourceRoot?: string;
+      inputSourceMap?: SourceMapInput;
+    },
+    code: string | { [sourceFileName: string]: string },
+  ) {
+    const map = (this._map = new GenMapping({ sourceRoot: opts.sourceRoot }));
+    this._sourceFileName = opts.sourceFileName?.replace(/\\/g, "/");
+    this._rawMappings = undefined;
+
+    if (opts.inputSourceMap) {
+      this._inputMap = new TraceMap(opts.inputSourceMap);
+      const resolvedSources = this._inputMap.resolvedSources;
+      if (resolvedSources.length) {
+        for (let i = 0; i < resolvedSources.length; i++) {
+          setSourceContent(
+            map,
+            resolvedSources[i],
+            this._inputMap.sourcesContent?.[i],
+          );
+        }
+      }
+    }
+
+    if (typeof code === "string" && !opts.inputSourceMap) {
+      setSourceContent(map, this._sourceFileName, code);
+    } else if (typeof code === "object") {
+      for (const sourceFileName of Object.keys(code)) {
+        setSourceContent(
+          map,
+          sourceFileName.replace(/\\/g, "/"),
+          code[sourceFileName],
+        );
+      }
+    }
   }
 
   /**
    * Get the sourcemap.
    */
-
-  get() {
-    if (!this._cachedMap) {
-      const map = (this._cachedMap = new sourceMap.SourceMapGenerator({
-        sourceRoot: this._opts.sourceRoot,
-      }));
-
-      const code = this._code;
-      if (typeof code === "string") {
-        map.setSourceContent(
-          this._opts.sourceFileName.replace(/\\/g, "/"),
-          code,
-        );
-      } else if (typeof code === "object") {
-        Object.keys(code).forEach(sourceFileName => {
-          map.setSourceContent(
-            sourceFileName.replace(/\\/g, "/"),
-            code[sourceFileName],
-          );
-        });
-      }
-
-      this._rawMappings.forEach(mapping => map.addMapping(mapping), map);
-    }
-
-    return this._cachedMap.toJSON();
+  get(): EncodedSourceMap {
+    return toEncodedMap(this._map);
   }
 
-  getRawMappings() {
-    return this._rawMappings.slice();
+  getDecoded(): DecodedSourceMap {
+    return toDecodedMap(this._map);
+  }
+
+  getRawMappings(): Mapping[] {
+    return (this._rawMappings ||= allMappings(this._map));
   }
 
   /**
@@ -60,53 +98,60 @@ export default class SourceMap {
    */
 
   mark(
-    generatedLine: number,
-    generatedColumn: number,
+    generated: { line: number; column: number },
     line: number,
     column: number,
     identifierName?: string | null,
+    identifierNamePos?: { line: number; column: number },
     filename?: string | null,
-    force?: boolean,
   ) {
-    // Adding an empty mapping at the start of a generated line just clutters the map.
-    if (this._lastGenLine !== generatedLine && line === null) return;
+    this._rawMappings = undefined;
 
-    // If this mapping points to the same source location as the last one, we can ignore it since
-    // the previous one covers it.
-    if (
-      !force &&
-      this._lastGenLine === generatedLine &&
-      this._lastSourceLine === line &&
-      this._lastSourceColumn === column
-    ) {
-      return;
+    let originalMapping: {
+      source: string | null;
+      name?: string | null;
+      line: number | null;
+      column: number | null;
+    };
+
+    if (line != null) {
+      if (this._inputMap) {
+        // This is the lookup for this mark
+        originalMapping = originalPositionFor(this._inputMap, {
+          line,
+          column,
+        });
+
+        // If the we found a name, nothing else needs to be done
+        // Maybe we're marking a `(` and the input map already had a name attached there,
+        // or we're marking a `(` and the sourcemap spanned a `foo(`,
+        // or we're marking an identifier, etc.
+        if (!originalMapping.name && identifierNamePos) {
+          // We're trying to mark a `(` (as that's the only thing that provides
+          // an identifierNamePos currently), and we the AST had an identifier attached.
+          // Lookup it's original name.
+          const originalIdentifierMapping = originalPositionFor(
+            this._inputMap,
+            identifierNamePos,
+          );
+          if (originalIdentifierMapping.name) {
+            identifierName = originalIdentifierMapping.name;
+          }
+        }
+      } else {
+        originalMapping = {
+          source: filename?.replace(/\\/g, "/") || this._sourceFileName,
+          line: line,
+          column: column,
+        };
+      }
     }
 
-    this._cachedMap = null;
-    this._lastGenLine = generatedLine;
-    this._lastSourceLine = line;
-    this._lastSourceColumn = column;
-
-    // We are deliberately not using the `source-map` library here to allow
-    // callers to use these mappings without any overhead
-    this._rawMappings.push({
-      // undefined to allow for more compact json serialization
-      name: identifierName || undefined,
-      generated: {
-        line: generatedLine,
-        column: generatedColumn,
-      },
-      source:
-        line == null
-          ? undefined
-          : (filename || this._opts.sourceFileName).replace(/\\/g, "/"),
-      original:
-        line == null
-          ? undefined
-          : {
-              line: line,
-              column: column,
-            },
+    maybeAddMapping(this._map, {
+      name: identifierName,
+      generated,
+      source: originalMapping?.source,
+      original: originalMapping,
     });
   }
 }

@@ -3,14 +3,18 @@ import {
   assertFunction,
   assertObject,
   msg,
-} from "./option-assertions";
+} from "./option-assertions.ts";
 
 import type {
   ValidatorSet,
   Validator,
   OptionPath,
   RootPath,
-} from "./option-assertions";
+} from "./option-assertions.ts";
+import type { ParserOptions } from "@babel/parser";
+import type { Visitor } from "@babel/traverse";
+import type { ValidatedOptions } from "./options.ts";
+import type { File, PluginAPI, PluginPass } from "../../index.ts";
 
 // Note: The casts here are just meant to be static assertions to make sure
 // that the assertion functions actually assert that the value's type matches
@@ -31,12 +35,15 @@ const VALIDATORS: ValidatorSet = {
   >,
 };
 
-function assertVisitorMap(loc: OptionPath, value: unknown): VisitorMap {
+function assertVisitorMap(loc: OptionPath, value: unknown): Visitor {
   const obj = assertObject(loc, value);
   if (obj) {
-    Object.keys(obj).forEach(prop => assertVisitorHandler(prop, obj[prop]));
+    Object.keys(obj).forEach(prop => {
+      if (prop !== "_exploded" && prop !== "_verified") {
+        assertVisitorHandler(prop, obj[prop]);
+      }
+    });
 
-    // @ts-ignore
     if (obj.enter || obj.exit) {
       throw new Error(
         `${msg(
@@ -45,13 +52,13 @@ function assertVisitorMap(loc: OptionPath, value: unknown): VisitorMap {
       );
     }
   }
-  return obj as VisitorMap;
+  return obj as Visitor;
 }
 
 function assertVisitorHandler(
   key: string,
   value: unknown,
-): VisitorHandler | void {
+): asserts value is VisitorHandler {
   if (value && typeof value === "object") {
     Object.keys(value).forEach((handler: string) => {
       if (handler !== "enter" && handler !== "exit") {
@@ -63,8 +70,6 @@ function assertVisitorHandler(
   } else if (typeof value !== "function") {
     throw new Error(`.visitor["${key}"] must be a function`);
   }
-
-  return value as any;
 }
 
 type VisitorHandler =
@@ -74,22 +79,27 @@ type VisitorHandler =
       exit?: Function;
     };
 
-export type VisitorMap = {
-  [x: string]: VisitorHandler;
-};
-
-export type PluginObject = {
+export type PluginObject<S extends PluginPass = PluginPass> = {
   name?: string;
-  manipulateOptions?: (options: unknown, parserOpts: unknown) => void;
-  pre?: Function;
-  post?: Function;
-  inherits?: Function;
-  visitor?: VisitorMap;
+  manipulateOptions?: (
+    options: ValidatedOptions,
+    parserOpts: ParserOptions,
+  ) => void;
+  pre?: (this: S, file: File) => void | Promise<void>;
+  post?: (this: S, file: File) => void | Promise<void>;
+  inherits?: (
+    api: PluginAPI,
+    options: unknown,
+    dirname: string,
+  ) => PluginObject;
+  visitor?: Visitor<S>;
   parserOverride?: Function;
   generatorOverride?: Function;
 };
 
-export function validatePluginObject(obj: {}): PluginObject {
+export function validatePluginObject(obj: {
+  [key: string]: unknown;
+}): PluginObject {
   const rootPath: RootPath = {
     type: "root",
     source: "plugin",
@@ -108,7 +118,7 @@ export function validatePluginObject(obj: {}): PluginObject {
       const invalidPluginPropertyError = new Error(
         `.${key} is not a valid Plugin property`,
       );
-      // @ts-expect-error todo(flow->ts) consider additing BabelConfigError with code field
+      // @ts-expect-error todo(flow->ts) consider adding BabelConfigError with code field
       invalidPluginPropertyError.code = "BABEL_UNKNOWN_PLUGIN_PROPERTY";
       throw invalidPluginPropertyError;
     }

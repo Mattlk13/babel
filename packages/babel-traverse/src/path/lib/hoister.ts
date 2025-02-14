@@ -1,3 +1,5 @@
+// TODO: Remove this file in Babel 8
+
 import { react } from "@babel/types";
 import {
   cloneNode,
@@ -6,10 +8,10 @@ import {
   variableDeclarator,
 } from "@babel/types";
 import type * as t from "@babel/types";
-import type Scope from "../../scope";
-import type NodePath from "../index";
-import type Binding from "../../scope/binding";
-import type { Visitor } from "../../types";
+import type Scope from "../../scope/index.ts";
+import type NodePath from "../index.ts";
+import type Binding from "../../scope/binding.ts";
+import type { Visitor } from "../../types.ts";
 
 const referenceVisitor: Visitor<PathHoister> = {
   // This visitor looks for bindings to establish a topmost scope for hoisting.
@@ -87,7 +89,7 @@ export default class PathHoister<T extends t.Node = t.Node> {
   }
 
   // A scope is compatible if all required bindings are reachable.
-  isCompatibleScope(scope) {
+  isCompatibleScope(scope: Scope) {
     for (const key of Object.keys(this.bindings)) {
       const binding = this.bindings[key];
       if (!scope.bindingIdentifierEquals(key, binding.identifier)) {
@@ -109,7 +111,7 @@ export default class PathHoister<T extends t.Node = t.Node> {
       }
 
       // deopt: These scopes are set in the visitor on const violations
-      if (this.breakOnScopePaths.indexOf(scope.path) >= 0) {
+      if (this.breakOnScopePaths.includes(scope.path)) {
         break;
       }
     } while ((scope = scope.parent));
@@ -198,7 +200,7 @@ export default class PathHoister<T extends t.Node = t.Node> {
   }
 
   // Find an attachment for this path.
-  getAttachmentParentForPath(path) {
+  getAttachmentParentForPath(path: NodePath) {
     do {
       if (
         // Beginning of the scope
@@ -212,7 +214,7 @@ export default class PathHoister<T extends t.Node = t.Node> {
   }
 
   // Returns true if a scope has param bindings.
-  hasOwnParamBindings(scope) {
+  hasOwnParamBindings(scope: Scope) {
     for (const name of Object.keys(this.bindings)) {
       if (!scope.hasOwnBinding(name)) continue;
 
@@ -223,7 +225,7 @@ export default class PathHoister<T extends t.Node = t.Node> {
     return false;
   }
 
-  run() {
+  run(): NodePath<t.Expression> | undefined {
     this.path.traverse(referenceVisitor, this);
 
     if (this.mutableBinding) return;
@@ -238,7 +240,8 @@ export default class PathHoister<T extends t.Node = t.Node> {
     if (attachTo.getFunctionParent() === this.path.getFunctionParent()) return;
 
     // generate declaration and insert it to our point
-    let uid = attachTo.scope.generateUidIdentifier("ref");
+    let uid: t.Identifier | t.JSXExpressionContainer =
+      attachTo.scope.generateUidIdentifier("ref");
 
     // @ts-expect-error todo(flow->ts): more specific type for this.path
     const declarator = variableDeclarator(uid, this.path.node);
@@ -259,6 +262,8 @@ export default class PathHoister<T extends t.Node = t.Node> {
 
     this.path.replaceWith(cloneNode(uid));
 
+    // @ts-expect-error TS cannot refine the type of `attached`
+    // TODO: Should we use `attached.isVariableDeclaration()`?
     return attachTo.isVariableDeclarator()
       ? attached.get("init")
       : attached.get("declarations.0.init");

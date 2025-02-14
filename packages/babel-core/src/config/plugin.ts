@@ -1,18 +1,27 @@
-import type { PluginObject } from "./validation/plugins";
+import { finalize } from "./helpers/deep-array.ts";
+import type { ReadonlyDeepArray } from "./helpers/deep-array.ts";
+import type { PluginObject } from "./validation/plugins.ts";
 
 export default class Plugin {
   key: string | undefined | null;
-  manipulateOptions: ((options: unknown, parserOpts: unknown) => void) | void;
-  post: Function | void;
-  pre: Function | void;
-  visitor: {};
+  manipulateOptions?: (options: unknown, parserOpts: unknown) => void;
+  post?: PluginObject["post"];
+  pre?: PluginObject["pre"];
+  visitor: PluginObject["visitor"];
 
-  parserOverride: Function | void;
-  generatorOverride: Function | void;
+  parserOverride?: Function;
+  generatorOverride?: Function;
 
-  options: {};
+  options: object;
 
-  constructor(plugin: PluginObject, options: {}, key?: string) {
+  externalDependencies: ReadonlyDeepArray<string>;
+
+  constructor(
+    plugin: PluginObject,
+    options: object,
+    key?: string,
+    externalDependencies: ReadonlyDeepArray<string> = finalize([]),
+  ) {
     this.key = plugin.name || key;
 
     this.manipulateOptions = plugin.manipulateOptions;
@@ -23,5 +32,6 @@ export default class Plugin {
     this.generatorOverride = plugin.generatorOverride;
 
     this.options = options;
+    this.externalDependencies = externalDependencies;
   }
 }

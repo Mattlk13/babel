@@ -1,23 +1,28 @@
-import plugins from "@babel/compat-data/plugins";
-import bugfixPlugins from "@babel/compat-data/plugin-bugfixes";
-import availablePlugins from "./available-plugins";
+import originalPlugins from "@babel/compat-data/plugins";
+import originalPluginsBugfixes from "@babel/compat-data/plugin-bugfixes";
+import originalOverlappingPlugins from "@babel/compat-data/overlapping-plugins";
+import availablePlugins from "./available-plugins.ts";
 
-const pluginsFiltered = {};
-const bugfixPluginsFiltered = {};
+const keys: <O extends object>(o: O) => (keyof O)[] = Object.keys;
 
-for (const plugin of Object.keys(plugins)) {
-  if (Object.hasOwnProperty.call(availablePlugins, plugin)) {
-    pluginsFiltered[plugin] = plugins[plugin];
-  }
+export const plugins = filterAvailable(originalPlugins);
+export const pluginsBugfixes = filterAvailable(originalPluginsBugfixes);
+export const overlappingPlugins = filterAvailable(originalOverlappingPlugins);
+
+if (!process.env.BABEL_8_BREAKING) {
+  // @ts-expect-error: we extend this here, since it's a syntax plugin and thus
+  // doesn't make sense to store it in a compat-data package.
+  overlappingPlugins["syntax-import-attributes"] = ["syntax-import-assertions"];
 }
 
-for (const plugin of Object.keys(bugfixPlugins)) {
-  if (Object.hasOwnProperty.call(availablePlugins, plugin)) {
-    bugfixPluginsFiltered[plugin] = bugfixPlugins[plugin];
+function filterAvailable<Data extends { [name: string]: unknown }>(
+  data: Data,
+): { [Name in keyof Data & keyof typeof availablePlugins]: Data[Name] } {
+  const result = {} as any;
+  for (const plugin of keys(data)) {
+    if (Object.hasOwn(availablePlugins, plugin)) {
+      result[plugin] = data[plugin];
+    }
   }
+  return result;
 }
-
-pluginsFiltered["proposal-class-properties"] =
-  pluginsFiltered["proposal-private-methods"];
-
-export { pluginsFiltered as plugins, bugfixPluginsFiltered as pluginsBugfixes };

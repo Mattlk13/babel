@@ -1,45 +1,40 @@
 import { types as t } from "@babel/core";
-import type { File } from "@babel/core";
-import type { NodePath } from "@babel/traverse";
-import nameFunction from "@babel/helper-function-name";
-import splitExportDeclaration from "@babel/helper-split-export-declaration";
+import type { PluginAPI, PluginObject, NodePath } from "@babel/core";
+
+import semver from "semver";
+
 import {
   buildPrivateNamesNodes,
   buildPrivateNamesMap,
   transformPrivateNamesUsage,
   buildFieldsInitNodes,
-} from "./fields";
-import type { PropPath } from "./fields";
-import { buildDecoratedClass, hasDecorators } from "./decorators";
-import { injectInitialization, extractComputedKeys } from "./misc";
+  buildCheckInRHS,
+} from "./fields.ts";
+import type { PropPath } from "./fields.ts";
+import createDecoratorTransform, { hasDecorators } from "./decorators.ts";
+import type { DecoratorVersionKind } from "./decorators.ts";
+import { buildDecoratedClass } from "./decorators-2018-09.ts" with { if: "!process.env.BABEL_8_BREAKING" };
+import { injectInitialization, extractComputedKeys } from "./misc.ts";
 import {
   enableFeature,
-  verifyUsedFeatures,
   FEATURES,
   isLoose,
-} from "./features";
+  shouldTransform,
+} from "./features.ts";
+import { assertFieldTransformed } from "./typescript.ts";
 
-export { FEATURES, enableFeature, injectInitialization };
+export { FEATURES, enableFeature, injectInitialization, buildCheckInRHS };
 
-declare const PACKAGE_JSON: { name: string; version: string };
-
-// Note: Versions are represented as an integer. e.g. 7.1.5 is represented
-//       as 70000100005. This method is easier than using a semver-parsing
-//       package, but it breaks if we release x.y.z where x, y or z are
-//       greater than 99_999.
-const version = PACKAGE_JSON.version
-  .split(".")
-  .reduce((v, x) => v * 1e5 + +x, 0);
 const versionKey = "@babel/plugin-class-features/version";
 
 interface Options {
   name: string;
   feature: number;
   loose?: boolean;
-  // same as PluginObject.manipulateOptions
-  manipulateOptions: (options: unknown, parserOpts: unknown) => void;
-  // TODO(flow->ts): change to babel api
-  api?: { assumption: (key?: string) => boolean | undefined };
+  inherits?: PluginObject["inherits"];
+  manipulateOptions?: PluginObject["manipulateOptions"];
+  api?: PluginAPI;
+  decoratorVersion?: DecoratorVersionKind | "2018-09";
 }
 
 export function createClassFeaturePlugin({
@@ -47,22 +42,62 @@ export function createClassFeaturePlugin({
   feature,
   loose,
   manipulateOptions,
-  // TODO(Babel 8): Remove the default value
-  api = { assumption: () => void 0 },
-}: Options) {
+  api,
+  inherits,
+  decoratorVersion,
+}: Options): PluginObject {
+  if (feature & FEATURES.decorators) {
+    if (process.env.BABEL_8_BREAKING) {
+      return createDecoratorTransform(api, { loose }, "2023-11", inherits);
+    } else {
+      if (
+        decoratorVersion === "2023-11" ||
+        decoratorVersion === "2023-05" ||
+        decoratorVersion === "2023-01" ||
+        decoratorVersion === "2022-03" ||
+        decoratorVersion === "2021-12"
+      ) {
+        return createDecoratorTransform(
+          api,
+          { loose },
+          decoratorVersion,
+          inherits,
+        );
+      }
+    }
+  }
+  if (!process.env.BABEL_8_BREAKING) {
+    api ??= { assumption: () => void 0 as any } as any;
+  }
   const setPublicClassFields = api.assumption("setPublicClassFields");
+  const privateFieldsAsSymbols = api.assumption("privateFieldsAsSymbols");
   const privateFieldsAsProperties = api.assumption("privateFieldsAsProperties");
+  const noUninitializedPrivateFieldAccess =
+    api.assumption("noUninitializedPrivateFieldAccess") ?? false;
   const constantSuper = api.assumption("constantSuper");
   const noDocumentAll = api.assumption("noDocumentAll");
 
+  if (privateFieldsAsProperties && privateFieldsAsSymbols) {
+    throw new Error(
+      `Cannot enable both the "privateFieldsAsProperties" and ` +
+        `"privateFieldsAsSymbols" assumptions as the same time.`,
+    );
+  }
+  const privateFieldsAsSymbolsOrProperties =
+    privateFieldsAsProperties || privateFieldsAsSymbols;
+
   if (loose === true) {
-    const explicit = [];
+    type AssumptionName = Parameters<PluginAPI["assumption"]>[0];
+    const explicit: `"${AssumptionName}"`[] = [];
 
     if (setPublicClassFields !== undefined) {
       explicit.push(`"setPublicClassFields"`);
     }
     if (privateFieldsAsProperties !== undefined) {
       explicit.push(`"privateFieldsAsProperties"`);
+    }
+    if (privateFieldsAsSymbols !== undefined) {
+      explicit.push(`"privateFieldsAsSymbols"`);
     }
     if (explicit.length !== 0) {
       console.warn(
@@ -74,7 +109,7 @@ export function createClassFeaturePlugin({
           ` following top-level option:\n` +
           `\t"assumptions": {\n` +
           `\t\t"setPublicClassFields": true,\n` +
-          `\t\t"privateFieldsAsProperties": true\n` +
+          `\t\t"privateFieldsAsSymbols": true\n` +
           `\t}`,
       );
     }
@@ -83,22 +118,39 @@ export function createClassFeaturePlugin({
   return {
     name,
     manipulateOptions,
+    inherits,
 
-    pre() {
-      enableFeature(this.file, feature, loose);
+    pre(file) {
+      enableFeature(file, feature, loose);
 
-      if (!this.file.get(versionKey) || this.file.get(versionKey) < version) {
-        this.file.set(versionKey, version);
+      if (!process.env.BABEL_8_BREAKING) {
+        // Until 7.21.4, we used to encode the version as a number.
+        // If file.get(versionKey) is a number, it has thus been
+        // set by an older version of this plugin.
+        if (typeof file.get(versionKey) === "number") {
+          file.set(versionKey, PACKAGE_JSON.version);
+          return;
+        }
+      }
+      if (
+        !file.get(versionKey) ||
+        semver.lt(file.get(versionKey), PACKAGE_JSON.version)
+      ) {
+        file.set(versionKey, PACKAGE_JSON.version);
       }
     },
 
     visitor: {
-      Class(path: NodePath<t.Class>, state: File) {
-        if (this.file.get(versionKey) !== version) return;
+      Class(path, { file }) {
+        if (file.get(versionKey) !== PACKAGE_JSON.version) return;
 
-        verifyUsedFeatures(path, this.file);
+        if (!shouldTransform(path, file)) return;
 
-        const loose = isLoose(this.file, feature);
+        const pathIsClassDeclaration = path.isClassDeclaration();
+
+        if (pathIsClassDeclaration) assertFieldTransformed(path);
+
+        const loose = isLoose(file, feature);
 
         let constructor: NodePath<t.ClassMethod>;
         const isDecorated = hasDecorators(path.node);
@@ -109,8 +161,6 @@ export function createClassFeaturePlugin({
         const body = path.get("body");
 
         for (const path of body.get("body")) {
-          verifyUsedFeatures(path, this.file);
-
           if (
             // check path.node.computed is enough, but ts will complain
             (path.isClassProperty() || path.isClassMethod()) &&
@@ -166,72 +216,118 @@ export function createClassFeaturePlugin({
               path.isPrivate() ||
               path.isStaticBlock?.()
             ) {
-              props.push(path);
+              props.push(path as PropPath);
             }
           }
         }
 
-        if (!props.length && !isDecorated) return;
-
-        const innerBinding = path.node.id;
-        let ref: t.Identifier;
-        if (!innerBinding || path.isClassExpression()) {
-          nameFunction(path);
-          ref = path.scope.generateUidIdentifier("class");
+        if (process.env.BABEL_8_BREAKING) {
+          if (!props.length) return;
         } else {
-          ref = t.cloneNode(path.node.id);
+          if (!props.length && !isDecorated) return;
         }
 
-        // NODE: These three functions don't support decorators yet,
-        //       but verifyUsedFeatures throws if there are both
-        //       decorators and private fields.
-        const privateNamesMap = buildPrivateNamesMap(props);
+        const innerBinding = path.node.id;
+        let ref: t.Identifier | null;
+        if (!innerBinding || !pathIsClassDeclaration) {
+          if (!process.env.BABEL_8_BREAKING && !USE_ESM && !IS_STANDALONE) {
+            // polyfill when being run by an older Babel version
+            path.ensureFunctionName ??=
+              // eslint-disable-next-line no-restricted-globals
+              require("@babel/traverse").NodePath.prototype.ensureFunctionName;
+          }
+          (path as NodePath<t.ClassExpression>).ensureFunctionName(false);
+          ref = path.scope.generateUidIdentifier(innerBinding?.name || "Class");
+        }
+        const classRefForDefine = ref ?? t.cloneNode(innerBinding);
+
+        const privateNamesMap = buildPrivateNamesMap(
+          classRefForDefine.name,
+          privateFieldsAsSymbolsOrProperties ?? loose,
+          props,
+          file,
+        );
         const privateNamesNodes = buildPrivateNamesNodes(
           privateNamesMap,
           privateFieldsAsProperties ?? loose,
-          state,
+          privateFieldsAsSymbols ?? false,
+          file,
         );
 
         transformPrivateNamesUsage(
-          ref,
+          classRefForDefine,
           path,
           privateNamesMap,
           {
-            privateFieldsAsProperties: privateFieldsAsProperties ?? loose,
+            privateFieldsAsProperties:
+              privateFieldsAsSymbolsOrProperties ?? loose,
+            noUninitializedPrivateFieldAccess,
             noDocumentAll,
             innerBinding,
           },
-          state,
+          file,
         );
 
         let keysNodes: t.Statement[],
           staticNodes: t.Statement[],
-          instanceNodes: t.Statement[],
+          instanceNodes: t.ExpressionStatement[],
+          lastInstanceNodeReturnsThis: boolean,
           pureStaticNodes: t.FunctionDeclaration[],
+          classBindingNode: t.Statement | null,
           wrapClass: (path: NodePath<t.Class>) => NodePath;
 
-        if (isDecorated) {
-          staticNodes = pureStaticNodes = keysNodes = [];
-          ({ instanceNodes, wrapClass } = buildDecoratedClass(
-            ref,
-            path,
-            elements,
-            this.file,
-          ));
-        } else {
-          keysNodes = extractComputedKeys(ref, path, computedPaths, this.file);
-          ({ staticNodes, pureStaticNodes, instanceNodes, wrapClass } =
-            buildFieldsInitNodes(
+        if (!process.env.BABEL_8_BREAKING) {
+          if (isDecorated) {
+            staticNodes = pureStaticNodes = keysNodes = [];
+            ({ instanceNodes, wrapClass } = buildDecoratedClass(
+              classRefForDefine,
+              path,
+              elements,
+              file,
+            ));
+          } else {
+            keysNodes = extractComputedKeys(path, computedPaths, file);
+            ({
+              staticNodes,
+              pureStaticNodes,
+              instanceNodes,
+              lastInstanceNodeReturnsThis,
+              classBindingNode,
+              wrapClass,
+            } = buildFieldsInitNodes(
               ref,
               path.node.superClass,
               props,
               privateNamesMap,
-              state,
+              file,
               setPublicClassFields ?? loose,
-              privateFieldsAsProperties ?? loose,
+              privateFieldsAsSymbolsOrProperties ?? loose,
+              noUninitializedPrivateFieldAccess,
               constantSuper ?? loose,
               innerBinding,
             ));
+          }
+        } else {
+          keysNodes = extractComputedKeys(path, computedPaths, file);
+          ({
+            staticNodes,
+            pureStaticNodes,
+            instanceNodes,
+            lastInstanceNodeReturnsThis,
+            classBindingNode,
+            wrapClass,
+          } = buildFieldsInitNodes(
+            ref,
+            path.node.superClass,
+            props,
+            privateNamesMap,
+            file,
+            setPublicClassFields ?? loose,
+            privateFieldsAsSymbolsOrProperties ?? loose,
+            noUninitializedPrivateFieldAccess,
+            constantSuper ?? loose,
+            innerBinding,
+          ));
         }
 
         if (instanceNodes.length > 0) {
@@ -240,12 +336,16 @@ export function createClassFeaturePlugin({
             constructor,
             instanceNodes,
             (referenceVisitor, state) => {
-              if (isDecorated) return;
+              if (!process.env.BABEL_8_BREAKING) {
+                if (isDecorated) return;
+              }
               for (const prop of props) {
-                if (prop.node.static) continue;
+                // @ts-expect-error: TS doesn't infer that prop.node is not a StaticBlock
+                if (t.isStaticBlock?.(prop.node) || prop.node.static) continue;
                 prop.traverse(referenceVisitor, state);
               }
             },
+            lastInstanceNodeReturnsThis,
           );
         }
 
@@ -260,35 +360,34 @@ export function createClassFeaturePlugin({
             .find(parent => parent.isStatement() || parent.isDeclaration())
             .insertAfter(pureStaticNodes);
         }
-      },
-
-      PrivateName(path: NodePath<t.PrivateName>) {
-        if (
-          this.file.get(versionKey) !== version ||
-          path.parentPath.isPrivate({ key: path.node })
-        ) {
-          return;
+        if (classBindingNode != null && pathIsClassDeclaration) {
+          wrappedPath.insertAfter(classBindingNode);
         }
-
-        throw path.buildCodeFrameError(`Unknown PrivateName "${path}"`);
       },
 
-      ExportDefaultDeclaration(path: NodePath<t.ExportDefaultDeclaration>) {
-        if (this.file.get(versionKey) !== version) return;
+      ExportDefaultDeclaration(path, { file }) {
+        if (!process.env.BABEL_8_BREAKING) {
+          if (file.get(versionKey) !== PACKAGE_JSON.version) return;
 
-        const decl = path.get("declaration");
+          const decl = path.get("declaration");
 
-        if (decl.isClassDeclaration() && hasDecorators(decl.node)) {
-          if (decl.node.id) {
-            // export default class Foo {}
-            //   -->
-            // class Foo {} export { Foo as default }
-            splitExportDeclaration(path);
-          } else {
-            // Annyms class declarations can be
-            // transformed as if they were expressions
-            // @ts-expect-error
-            decl.node.type = "ClassExpression";
+          if (decl.isClassDeclaration() && hasDecorators(decl.node)) {
+            if (decl.node.id) {
+              // export default class Foo {}
+              //   -->
+              // class Foo {} export { Foo as default }
+              if (!process.env.BABEL_8_BREAKING && !USE_ESM && !IS_STANDALONE) {
+                // polyfill when being run by an older Babel version
+                path.splitExportDeclaration ??=
+                  // eslint-disable-next-line no-restricted-globals
+                  require("@babel/traverse").NodePath.prototype.splitExportDeclaration;
+              }
+              path.splitExportDeclaration();
+            } else {
+              // @ts-expect-error Anonymous class declarations can be
+              // transformed as if they were expressions
+              decl.node.type = "ClassExpression";
+            }
           }
         }
       },

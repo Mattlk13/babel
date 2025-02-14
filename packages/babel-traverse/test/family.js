@@ -1,6 +1,8 @@
-import traverse from "../lib";
 import { parse } from "@babel/parser";
 import * as t from "@babel/types";
+
+import _traverse from "../lib/index.js";
+const traverse = _traverse.default || _traverse;
 
 describe("path/family", function () {
   describe("getBindingIdentifiers", function () {
@@ -107,6 +109,24 @@ describe("path/family", function () {
 
       expect(testHasScope).toBe(true);
       expect(consequentHasScope).toBe(true);
+    });
+    it("should be correct after mutating an unrelated container", function () {
+      const ast = parse("`a${a}b${b}`");
+      let secondQuasiValue;
+      let firstExpressionValue;
+
+      traverse(ast, {
+        TemplateLiteral(path) {
+          const [firstQuasi] = path.get("quasis");
+          const [firstExpression] = path.get("expressions");
+          path.unshiftContainer("expressions", t.stringLiteral("hi"));
+          secondQuasiValue = firstQuasi.getNextSibling().node.value.raw;
+          firstExpressionValue = firstExpression.getPrevSibling().node.value;
+        },
+      });
+
+      expect(secondQuasiValue).toBe("b");
+      expect(firstExpressionValue).toBe("hi");
     });
   });
   describe("getCompletionRecords", function () {

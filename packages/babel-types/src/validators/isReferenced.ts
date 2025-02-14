@@ -1,4 +1,4 @@
-import type * as t from "..";
+import type * as t from "../index.ts";
 
 /**
  * Check if the input `node` is a reference to a bound variable.
@@ -63,6 +63,7 @@ export default function isReferenced(
     // yes: class { [NODE] = value; }
     // yes: class { key = NODE; }
     case "ClassProperty":
+    case "ClassAccessorProperty":
       if (parent.key === node) {
         return !!parent.computed;
       }
@@ -153,7 +154,7 @@ export default function isReferenced(
     case "MetaProperty":
       return false;
 
-    // yes: type X = { somePropert: NODE }
+    // yes: type X = { someProperty: NODE }
     // no: type X = { NODE: OtherType }
     case "ObjectTypeProperty":
       return parent.key !== node;

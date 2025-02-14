@@ -5,7 +5,7 @@ export const COMMENT_KEYS = [
   "leadingComments",
   "trailingComments",
   "innerComments",
-];
+] as const;
 
 export const LOGICAL_OPERATORS = ["||", "&&", "??"];
 export const UPDATE_OPERATORS = ["++", "--"];
@@ -38,6 +38,7 @@ export const BINARY_OPERATORS = [
   "+",
   ...NUMBER_BINARY_OPERATORS,
   ...BOOLEAN_BINARY_OPERATORS,
+  "|>",
 ];
 
 export const ASSIGNMENT_OPERATORS = [
@@ -61,7 +62,7 @@ export const UNARY_OPERATORS = [
 export const INHERIT_KEYS = {
   optional: ["typeAnnotation", "typeParameters", "returnType"],
   force: ["start", "loc", "end"],
-};
+} as const;
 
 export const BLOCK_SCOPED_SYMBOL = Symbol.for("var used to be block scoped");
 export const NOT_LOCAL_BINDING = Symbol.for(

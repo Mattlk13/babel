@@ -1,6 +1,7 @@
 import browserslist from "browserslist";
 import { findSuggestion } from "@babel/helper-validator-option";
 import browserModulesData from "@babel/compat-data/native-modules";
+import LruCache from "lru-cache";
 
 import {
   semverify,
@@ -8,23 +9,29 @@ import {
   isUnreleasedVersion,
   getLowestUnreleased,
   getHighestUnreleased,
-} from "./utils";
+} from "./utils.ts";
 import { OptionValidator } from "@babel/helper-validator-option";
-import { browserNameMap } from "./targets";
-import { TargetNames } from "./options";
-import type { Targets, InputTargets, Browsers, TargetsTuple } from "./types";
+import { browserNameMap } from "./targets.ts";
+import { TargetNames } from "./options.ts";
+import type {
+  Target,
+  Targets,
+  InputTargets,
+  Browsers,
+  BrowserslistBrowserName,
+  TargetsTuple,
+} from "./types.ts";
 
-export type { Targets, InputTargets };
+export type { Target, Targets, InputTargets };
 
-export { prettifyTargets } from "./pretty";
-export { getInclusionReasons } from "./debug";
-export { default as filterItems, isRequired } from "./filter-items";
-export { unreleasedLabels } from "./targets";
+export { prettifyTargets } from "./pretty.ts";
+export { getInclusionReasons } from "./debug.ts";
+export { default as filterItems, isRequired } from "./filter-items.ts";
+export { unreleasedLabels } from "./targets.ts";
 export { TargetNames };
 
 const ESM_SUPPORT = browserModulesData["es6.module"];
 
-declare const PACKAGE_JSON: { name: string; version: string };
 const v = new OptionValidator(PACKAGE_JSON.name);
 
 function validateTargetNames(targets: Targets): TargetsTuple {
@@ -38,7 +45,7 @@ function validateTargetNames(targets: Targets): TargetsTuple {
     }
   }
 
-  return targets as any;
+  return targets;
 }
 
 export function isBrowsersQueryValid(browsers: unknown): boolean {
@@ -58,51 +65,53 @@ function validateBrowsers(browsers: Browsers | undefined) {
 }
 
 function getLowestVersions(browsers: Array<string>): Targets {
-  return browsers.reduce((all: any, browser: string): any => {
-    const [browserName, browserVersion] = browser.split(" ");
-    const normalizedBrowserName = browserNameMap[browserName];
+  return browsers.reduce(
+    (all, browser) => {
+      const [browserName, browserVersion] = browser.split(" ") as [
+        BrowserslistBrowserName,
+        string,
+      ];
+      const target = browserNameMap[browserName];
 
-    if (!normalizedBrowserName) {
-      return all;
-    }
-
-    try {
-      // Browser version can return as "10.0-10.2"
-      const splitVersion = browserVersion.split("-")[0].toLowerCase();
-      const isSplitUnreleased = isUnreleasedVersion(splitVersion, browserName);
-
-      if (!all[normalizedBrowserName]) {
-        all[normalizedBrowserName] = isSplitUnreleased
-          ? splitVersion
-          : semverify(splitVersion);
+      if (!target) {
         return all;
       }
 
-      const version = all[normalizedBrowserName];
-      const isUnreleased = isUnreleasedVersion(version, browserName);
+      try {
+        // Browser version can return as "10.0-10.2"
+        const splitVersion = browserVersion.split("-")[0].toLowerCase();
+        const isSplitUnreleased = isUnreleasedVersion(splitVersion, target);
 
-      if (isUnreleased && isSplitUnreleased) {
-        all[normalizedBrowserName] = getLowestUnreleased(
-          version,
-          splitVersion,
-          browserName,
-        );
-      } else if (isUnreleased) {
-        all[normalizedBrowserName] = semverify(splitVersion);
-      } else if (!isUnreleased && !isSplitUnreleased) {
-        const parsedBrowserVersion = semverify(splitVersion);
+        if (!all[target]) {
+          all[target] = isSplitUnreleased
+            ? splitVersion
+            : semverify(splitVersion);
+          return all;
+        }
 
-        all[normalizedBrowserName] = semverMin(version, parsedBrowserVersion);
-      }
-    } catch (e) {}
+        const version = all[target];
+        const isUnreleased = isUnreleasedVersion(version, target);
 
-    return all;
-  }, {});
+        if (isUnreleased && isSplitUnreleased) {
+          all[target] = getLowestUnreleased(version, splitVersion, target);
+        } else if (isUnreleased) {
+          all[target] = semverify(splitVersion);
+        } else if (!isUnreleased && !isSplitUnreleased) {
+          const parsedBrowserVersion = semverify(splitVersion);
+
+          all[target] = semverMin(version, parsedBrowserVersion);
+        }
+      } catch (_) {}
+
+      return all;
+    },
+    {} as Record<Target, string>,
+  );
 }
 
 function outputDecimalWarning(
-  decimalTargets: Array<{ target: string; value: string }>,
-): void {
+  decimalTargets: Array<{ target: string; value: number }>,
+) {
   if (!decimalTargets.length) {
     return;
   }
@@ -117,10 +126,10 @@ getting parsed as 6.1, which can lead to unexpected behavior.
 `);
 }
 
-function semverifyTarget(target, value) {
+function semverifyTarget(target: Target, value: string) {
   try {
     return semverify(value);
-  } catch (error) {
+  } catch (_) {
     throw new Error(
       v.formatMessage(
         `'${value}' is not a valid value for 'targets.${target}'.`,
@@ -129,29 +138,31 @@ function semverifyTarget(target, value) {
   }
 }
 
-const targetParserMap = {
-  __default(target, value) {
-    const version = isUnreleasedVersion(value, target)
-      ? value.toLowerCase()
-      : semverifyTarget(target, value);
-    return [target, version];
-  },
+// Parse `node: true` and `node: "current"` to version
+function nodeTargetParser(value: true | string) {
+  const parsed =
+    value === true || value === "current"
+      ? // Align with `browserslist` and strip prerelease tag.
+        process.versions.node.split("-")[0]
+      : semverifyTarget("node", value);
+  return ["node", parsed] as const;
+}
 
-  // Parse `node: true` and `node: "current"` to version
-  node(target, value) {
-    const parsed =
-      value === true || value === "current"
-        ? process.versions.node
-        : semverifyTarget(target, value);
-    return [target, parsed];
-  },
-};
+function defaultTargetParser(
+  target: Exclude<Target, "node">,
+  value: string,
+): readonly [Exclude<Target, "node">, string] {
+  const version = isUnreleasedVersion(value, target)
+    ? value.toLowerCase()
+    : semverifyTarget(target, value);
+  return [target, version] as const;
+}
 
 function generateTargets(inputTargets: InputTargets): Targets {
   const input = { ...inputTargets };
   delete input.esmodules;
   delete input.browsers;
-  return input as any as Targets;
+  return input;
 }
 
 function resolveTargets(queries: Browsers, env?: string): Targets {
@@ -160,6 +171,18 @@ function resolveTargets(queries: Browsers, env?: string): Targets {
     env,
   });
   return getLowestVersions(resolved);
+}
+
+const targetsCache = new LruCache({ max: 64 });
+
+function resolveTargetsCached(queries: Browsers, env?: string): Targets {
+  const cacheKey = typeof queries === "string" ? queries : queries.join() + env;
+  let cached = targetsCache.get(cacheKey) as Targets | undefined;
+  if (!cached) {
+    cached = resolveTargets(queries, env);
+    targetsCache.set(cacheKey, cached);
+  }
+  return { ...cached };
 }
 
 type GetTargetsOption = {
@@ -171,19 +194,21 @@ type GetTargetsOption = {
   browserslistEnv?: string;
   // true to disable config loading
   ignoreBrowserslistConfig?: boolean;
+  // custom hook when browserslist config is found
+  onBrowserslistConfigFound?: (configFile: string) => void;
 };
 
 export default function getTargets(
-  inputTargets: InputTargets = {} as InputTargets,
+  inputTargets: InputTargets = {},
   options: GetTargetsOption = {},
 ): Targets {
   let { browsers, esmodules } = inputTargets;
-  const { configPath = "." } = options;
+  const { configPath = ".", onBrowserslistConfigFound } = options;
 
   validateBrowsers(browsers);
 
   const input = generateTargets(inputTargets);
-  let targets: TargetsTuple = validateTargetNames(input);
+  let targets = validateTargetNames(input);
 
   const shouldParseBrowsers = !!browsers;
   const hasTargets = shouldParseBrowsers || Object.keys(targets).length > 0;
@@ -191,16 +216,26 @@ export default function getTargets(
     !options.ignoreBrowserslistConfig && !hasTargets;
 
   if (!browsers && shouldSearchForConfig) {
-    browsers = browserslist.loadConfig({
-      config: options.configFile,
-      path: configPath,
-      env: options.browserslistEnv,
-    });
+    // https://github.com/browserslist/browserslist/blob/8ae85caa905d130f4ca86f7a998a5b63abbbe582/node.js#L243
+    browsers = process.env.BROWSERSLIST;
+    if (!browsers) {
+      const configFile =
+        options.configFile ||
+        process.env.BROWSERSLIST_CONFIG ||
+        browserslist.findConfigFile(configPath);
+      if (configFile != null) {
+        onBrowserslistConfigFound?.(configFile);
+        browsers = browserslist.loadConfig({
+          config: configFile,
+          env: options.browserslistEnv,
+        });
+      }
+    }
+
     if (browsers == null) {
       if (process.env.BABEL_8_BREAKING) {
-        // In Babel 8, if no targets are passed, we use browserslist's defaults
-        // and exclude IE 11.
-        browsers = ["defaults, not ie 11"];
+        // In Babel 8, if no targets are passed, we use browserslist's defaults.
+        browsers = ["defaults"];
       } else {
         // If no targets are passed, we need to overwrite browserslist's defaults
         // so that we enable all transforms (acting like the now deprecated
@@ -214,24 +249,39 @@ export default function getTargets(
   // These values OVERRIDE the `browsers` field.
   if (esmodules && (esmodules !== "intersect" || !browsers?.length)) {
     browsers = Object.keys(ESM_SUPPORT)
-      .map(browser => `${browser} >= ${ESM_SUPPORT[browser]}`)
+      .map(
+        (browser: keyof typeof ESM_SUPPORT) =>
+          `${browser} >= ${ESM_SUPPORT[browser]}`,
+      )
       .join(", ");
     esmodules = false;
   }
 
-  if (browsers) {
-    const queryBrowsers = resolveTargets(browsers, options.browserslistEnv);
+  // If current value of `browsers` is undefined (`ignoreBrowserslistConfig` should be `false`)
+  // or an empty array (without any user config, use default config),
+  // we don't need to call `resolveTargets` to execute the related methods of `browserslist` library.
+  if (browsers?.length) {
+    const queryBrowsers = resolveTargetsCached(
+      browsers,
+      options.browserslistEnv,
+    );
 
     if (esmodules === "intersect") {
-      for (const browser of Object.keys(queryBrowsers)) {
-        const version = queryBrowsers[browser];
+      for (const browser of Object.keys(queryBrowsers) as Target[]) {
+        if (browser !== "deno" && browser !== "ie") {
+          const esmSupportVersion =
+            ESM_SUPPORT[browser === "opera_mobile" ? "op_mob" : browser];
 
-        if (ESM_SUPPORT[browser]) {
-          queryBrowsers[browser] = getHighestUnreleased(
-            version,
-            semverify(ESM_SUPPORT[browser]),
-            browser,
-          );
+          if (esmSupportVersion) {
+            const version = queryBrowsers[browser];
+            queryBrowsers[browser] = getHighestUnreleased(
+              version,
+              semverify(esmSupportVersion),
+              browser,
+            );
+          } else {
+            delete queryBrowsers[browser];
+          }
         } else {
           delete queryBrowsers[browser];
         }
@@ -242,9 +292,9 @@ export default function getTargets(
   }
 
   // Parse remaining targets
-  const result: Targets = {} as Targets;
+  const result: Targets = {};
   const decimalWarnings = [];
-  for (const target of Object.keys(targets).sort()) {
+  for (const target of Object.keys(targets).sort() as Target[]) {
     const value = targets[target];
 
     // Warn when specifying minor/patch as a decimal
@@ -252,10 +302,10 @@ export default function getTargets(
       decimalWarnings.push({ target, value });
     }
 
-    // Check if we have a target parser?
-    // $FlowIgnore - Flow doesn't like that some targetParserMap[target] might be missing
-    const parser = targetParserMap[target] ?? targetParserMap.__default;
-    const [parsedTarget, parsedValue] = parser(target, value);
+    const [parsedTarget, parsedValue] =
+      target === "node"
+        ? nodeTargetParser(value)
+        : defaultTargetParser(target, value as string);
 
     if (parsedValue) {
       // Merge (lowest wins)

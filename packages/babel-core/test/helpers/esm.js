@@ -1,42 +1,30 @@
 import cp from "child_process";
 import util from "util";
 import path from "path";
-import { fileURLToPath } from "url";
-import { createRequire } from "module";
+import { USE_ESM, commonJS } from "$repo-utils";
 
-import * as babel from "../../lib";
+import * as babel from "../../lib/index.js";
 
-const require = createRequire(import.meta.url);
-const dirname = path.dirname(fileURLToPath(import.meta.url));
+const { require, __dirname } = commonJS(import.meta.url);
 
 // "minNodeVersion": "10.0.0" <-- For Ctrl+F when dropping node 10
-const nodeSupportsESM = parseInt(process.versions.node) >= 12;
-const isWindows = process.platform === "win32";
+export const supportsESM = parseInt(process.versions.node) >= 12;
 
-export const supportsESM = nodeSupportsESM && !isWindows;
+export const outputType = USE_ESM ? "module" : "script";
 
 export const isMJS = file => path.extname(file) === ".mjs";
 
-export const itESM = supportsESM ? it : it.skip;
-
-export function skipUnsupportedESM(esm, name) {
-  if (esm && !nodeSupportsESM) {
+export function skipUnsupportedESM(name) {
+  if (!supportsESM) {
     console.warn(
       `Skipping "${name}" because native ECMAScript modules are not supported.`,
-    );
-    return true;
-  }
-  // This can be removed when loadOptionsAsyncInSpawedProcess is removed.
-  if (esm && isWindows) {
-    console.warn(
-      `Skipping "${name}" because the ESM runner cannot be spawned on Windows.`,
     );
     return true;
   }
   return false;
 }
 
-export function loadOptionsAsync({ filename, cwd = dirname }, mjs) {
+export function loadOptionsAsync({ filename, cwd = __dirname }, mjs) {
   if (mjs) {
     // import() crashes with jest
     return spawn("load-options-async", filename, cwd);
@@ -50,6 +38,11 @@ export function spawnTransformAsync() {
   return spawn("compile-async");
 }
 
+export function spawnTransformAsyncParallel() {
+  // import() crashes with jest
+  return spawn("compile-async-parallel");
+}
+
 export function spawnTransformSync() {
   // import() crashes with jest
   return spawn("compile-sync");
@@ -60,14 +53,14 @@ export function spawnTransformSync() {
 // Jest supports dynamic import(), but Node.js segfaults when using it in our tests.
 async function spawn(runner, filename, cwd = process.cwd()) {
   const { stdout, stderr } = await util.promisify(cp.execFile)(
-    require.resolve(`../fixtures/babel-${runner}.mjs`),
+    process.execPath,
     // pass `cwd` as params as `process.cwd()` will normalize `cwd` on macOS
-    [filename, cwd],
+    [require.resolve(`../fixtures/babel-${runner}.mjs`), filename, cwd],
     { cwd, env: process.env },
   );
 
   const EXPERIMENTAL_WARNING =
-    /\(node:\d+\) ExperimentalWarning: The ESM module loader is experimental\./;
+    /\(node:\d+\) ExperimentalWarning: (The ESM module loader is experimental\.|CommonJS module .+? is loading ES Module .+? using require\(\)\.\nSupport for loading ES Module in require\(\) is an experimental feature and might change at any time\n\(Use `node --trace-warnings ...` to show where the warning was created\))/;
 
   if (stderr.replace(EXPERIMENTAL_WARNING, "").trim()) {
     throw new Error(

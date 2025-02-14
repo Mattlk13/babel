@@ -1,9 +1,8 @@
 "use strict";
 
-let Base = function Base() {
+let Base = /*#__PURE__*/babelHelpers.createClass(function Base() {
   babelHelpers.classCallCheck(this, Base);
-};
-
+});
 Object.defineProperty(Base.prototype, 0, {
   value: 0,
   writable: true,
@@ -19,37 +18,27 @@ const proper = {
   get prop() {
     return i++;
   }
-
 };
-
 let Obj = /*#__PURE__*/function (_Base) {
-  babelHelpers.inherits(Obj, _Base);
-
-  var _super = babelHelpers.createSuper(Obj);
-
   function Obj() {
     babelHelpers.classCallCheck(this, Obj);
-    return _super.apply(this, arguments);
+    return babelHelpers.callSuper(this, Obj, arguments);
   }
-
-  babelHelpers.createClass(Obj, [{
+  babelHelpers.inherits(Obj, _Base);
+  return babelHelpers.createClass(Obj, [{
     key: "assign",
     value: function assign() {
       var _proper$prop;
-
-      babelHelpers.set(babelHelpers.getPrototypeOf(Obj.prototype), _proper$prop = proper.prop, babelHelpers.get(babelHelpers.getPrototypeOf(Obj.prototype), _proper$prop, this) + 1, this, true);
+      babelHelpers.superPropSet(Obj, _proper$prop = proper.prop, babelHelpers.superPropGet(Obj, _proper$prop, this, 1) + 1, this, 1, 1);
     }
   }, {
     key: "assign2",
     value: function assign2() {
       var _i;
-
-      babelHelpers.set(babelHelpers.getPrototypeOf(Obj.prototype), _i = i, babelHelpers.get(babelHelpers.getPrototypeOf(Obj.prototype), _i, this) + 1, this, true);
+      babelHelpers.superPropSet(Obj, _i = i, babelHelpers.superPropGet(Obj, _i, this, 1) + 1, this, 1, 1);
     }
   }]);
-  return Obj;
 }(Base);
-
 const obj = new Obj();
 obj.assign();
 expect(i).toBe(1);

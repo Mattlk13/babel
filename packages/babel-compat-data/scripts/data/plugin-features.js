@@ -18,6 +18,7 @@ const es2015Parameter = {
       "rest parameters",
       "destructuring, parameters / aliased defaults, arrow function",
       "destructuring, parameters / shorthand defaults, arrow function",
+      "destructuring, parameters / duplicate identifier",
     ],
   },
 };
@@ -101,10 +102,20 @@ const es2015 = {
     features: ["destructuring, assignment", "destructuring, declarations"],
   },
   "transform-block-scoping": {
-    features: ["const", "let"],
+    features: [
+      "const",
+      "let",
+      // regenerator-transform doesn't support let/const,
+      // so we must compile them when compiling generators.
+      "generators",
+    ],
   },
   "transform-typeof-symbol": {
-    features: ["Symbol / typeof support"],
+    features: [
+      "Symbol / typeof support",
+      "Symbol / can convert with String()",
+      "Symbol / Object(symbol)",
+    ],
   },
   "transform-new-target": {
     features: ["new.target", 'arrow functions / lexical "new.target" binding'],
@@ -127,51 +138,85 @@ const es2017 = {
 };
 
 const es2018 = {
-  "proposal-async-generator-functions": "Asynchronous Iterators",
-  "proposal-object-rest-spread": "object rest/spread properties",
+  "transform-async-generator-functions": "Asynchronous Iterators",
+  "transform-object-rest-spread": "object rest/spread properties",
 
   "transform-dotall-regex": "s (dotAll) flag for regular expressions",
-  "proposal-unicode-property-regex": "RegExp Unicode Property Escapes",
+  "transform-unicode-property-regex": "RegExp Unicode Property Escapes / basic",
   "transform-named-capturing-groups-regex": "RegExp named capture groups",
 };
 
 const es2019 = {
-  "proposal-json-strings": "JSON superset",
-  "proposal-optional-catch-binding": "optional catch binding",
+  "transform-json-strings": "JSON superset",
+  "transform-optional-catch-binding": "optional catch binding",
 };
 
 const es2020 = {
-  "proposal-nullish-coalescing-operator": "nullish coalescing operator (??)",
-  "proposal-optional-chaining": "optional chaining operator (?.)",
+  "transform-nullish-coalescing-operator": "nullish coalescing operator (??)",
+  "transform-optional-chaining": "optional chaining operator (?.)",
 };
 
 const es2021 = {
-  "proposal-numeric-separator": "numeric separator",
-  "proposal-logical-assignment-operators": "Logical Assignment",
+  "transform-numeric-separator": "numeric separators",
+  "transform-logical-assignment-operators": "Logical Assignment",
 };
 
 const es2022 = {
-  "proposal-private-property-in-object":
+  "bugfix/transform-v8-static-class-fields-redefine-readonly": {
+    features: ["static class fields / static class fields use [[Define]]"],
+    replaces: "transform-class-properties",
+  },
+  "bugfix/transform-firefox-class-in-computed-class-key": {
+    replaces: "transform-class-properties",
+    overwrite: {
+      // TODO: Once Firefox releases the fix, write the correct version here.
+      firefox: undefined,
+    },
+  },
+  "bugfix/transform-safari-class-field-initializer-scope": {
+    features: ["instance class fields / resolving identifier in parent scope"],
+    replaces: "transform-class-properties",
+  },
+  "transform-class-static-block": "Class static initialization blocks",
+  "transform-private-property-in-object":
     "Ergonomic brand checks for private fields",
-  "proposal-class-properties": {
+  "transform-class-properties": {
     features: [
       "static class fields",
-      "instance class fields, public instance class fields",
-      "instance class fields, private instance class fields basic support",
-      "instance class fields, computed instance class fields",
+      "instance class fields / public instance class fields",
+      "instance class fields / private instance class fields basic support",
+      "instance class fields / computed instance class fields",
+      "instance class fields / resolving identifier in parent scope",
     ],
   },
-  "proposal-private-methods": "private class methods",
+  "transform-private-methods": "private class methods",
 };
 
-const shippedProposal = {
-  "proposal-class-static-block": "Class static initialization blocks",
+const es2024 = {
+  "transform-unicode-sets-regex": {
+    features: [
+      "RegExp `v` flag / set notations",
+      "RegExp `v` flag / properties of Strings",
+      "RegExp `v` flag / constructor supports it",
+      "RegExp `v` flag / shows up in flags",
+    ],
+  },
 };
+
+const es2025 = {
+  "transform-duplicate-named-capturing-groups-regex":
+    "Duplicate named capturing groups",
+  "transform-regexp-modifiers": "RegExp Pattern Modifiers",
+};
+
+const shippedProposal = {};
 
 // Run plugins for modern features first
 module.exports = Object.assign(
   {},
   shippedProposal,
+  es2025,
+  es2024,
   es2022,
   es2021,
   es2020,

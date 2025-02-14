@@ -6,15 +6,36 @@
  * LICENSE file in the root directory of the React source tree.
  */
 
-const scriptTypes = ["text/jsx", "text/babel"];
+const scriptTypes = new Set(["text/jsx", "text/babel"]);
 
-let headEl;
+import type { transform } from "./index.ts";
+import type { InputOptions } from "@babel/core";
+
+let headEl: HTMLHeadElement;
 let inlineScriptCount = 0;
+
+type CompilationResult = {
+  async: boolean;
+  type: string;
+  error: boolean;
+  loaded: boolean;
+  content: string | null;
+  executed: boolean;
+  // nonce is undefined in browsers that don't support the nonce global attribute
+  nonce: string | undefined;
+  // todo: refine plugins/presets
+  plugins: InputOptions["plugins"];
+  presets: InputOptions["presets"];
+  url: string | null;
+};
 
 /**
  * Actually transform the code.
  */
-function transformCode(transformFn, script) {
+function transformCode(
+  transformFn: typeof transform,
+  script: CompilationResult,
+) {
   let source;
   if (script.url != null) {
     source = script.url;
@@ -33,7 +54,7 @@ function transformCode(transformFn, script) {
  * Builds the Babel options for transforming the specified script, using some
  * sensible default presets and plugins if none were explicitly provided.
  */
-function buildBabelOptions(script, filename) {
+function buildBabelOptions(script: CompilationResult, filename: string) {
   let presets = script.presets;
   if (!presets) {
     if (script.type === "module") {
@@ -58,11 +79,11 @@ function buildBabelOptions(script, filename) {
     filename,
     presets,
     plugins: script.plugins || [
-      "proposal-class-properties",
-      "proposal-object-rest-spread",
+      "transform-class-properties",
+      "transform-object-rest-spread",
       "transform-flow-strip-types",
     ],
-    sourceMaps: "inline",
+    sourceMaps: "inline" as const,
     sourceFileName: filename,
   };
 }
@@ -71,10 +92,13 @@ function buildBabelOptions(script, filename) {
  * Appends a script element at the end of the <head> with the content of code,
  * after transforming it.
  */
-function run(transformFn, script) {
+function run(transformFn: typeof transform, script: CompilationResult) {
   const scriptEl = document.createElement("script");
   if (script.type) {
     scriptEl.setAttribute("type", script.type);
+  }
+  if (script.nonce) {
+    scriptEl.nonce = script.nonce;
   }
   scriptEl.text = transformCode(transformFn, script);
   headEl.appendChild(scriptEl);
@@ -83,7 +107,11 @@ function run(transformFn, script) {
 /**
  * Load script from the provided url and pass the content to the callback.
  */
-function load(url, successCallback, errorCallback) {
+function load(
+  url: string,
+  successCallback: (content: string) => void,
+  errorCallback: () => void,
+) {
   const xhr = new XMLHttpRequest();
 
   // async, however scripts will be executed in the order they are in the
@@ -102,7 +130,7 @@ function load(url, successCallback, errorCallback) {
       }
     }
   };
-  return xhr.send(null);
+  xhr.send(null);
 }
 
 /**
@@ -110,7 +138,10 @@ function load(url, successCallback, errorCallback) {
  * the string is empty, returns an empty array. If the string is not defined,
  * returns null.
  */
-function getPluginsOrPresetsFromScript(script, attributeName) {
+function getPluginsOrPresetsFromScript(
+  script: HTMLScriptElement,
+  attributeName: string,
+) {
   const rawValue = script.getAttribute(attributeName);
   if (rawValue === "") {
     // Empty string means to not load ANY presets or plugins
@@ -129,65 +160,64 @@ function getPluginsOrPresetsFromScript(script, attributeName) {
  * inline script, or by using XHR. Transforms are applied if needed. The scripts
  * are executed in the order they are found on the page.
  */
-function loadScripts(transformFn, scripts) {
-  const result = [];
+function loadScripts(
+  transformFn: typeof transform,
+  scripts: HTMLScriptElement[],
+) {
+  const results: CompilationResult[] = [];
   const count = scripts.length;
 
   function check() {
-    let script, i;
+    for (let i = 0; i < count; i++) {
+      const result = results[i];
 
-    for (i = 0; i < count; i++) {
-      script = result[i];
-
-      if (script.loaded && !script.executed) {
-        script.executed = true;
-        run(transformFn, script);
-      } else if (!script.loaded && !script.error && !script.async) {
+      if (result.loaded && !result.executed) {
+        result.executed = true;
+        run(transformFn, result);
+      } else if (!result.loaded && !result.error && !result.async) {
         break;
       }
     }
   }
 
-  scripts.forEach((script, i) => {
-    const scriptData = {
+  for (let i = 0; i < count; i++) {
+    const script = scripts[i];
+    const result: CompilationResult = {
       // script.async is always true for non-JavaScript script tags
       async: script.hasAttribute("async"),
       type: script.getAttribute("data-type"),
+      nonce: script.nonce,
       error: false,
       executed: false,
       plugins: getPluginsOrPresetsFromScript(script, "data-plugins"),
       presets: getPluginsOrPresetsFromScript(script, "data-presets"),
+      loaded: false,
+      url: null,
+      content: null,
     };
+    results.push(result);
 
     if (script.src) {
-      result[i] = {
-        ...scriptData,
-        content: null,
-        loaded: false,
-        url: script.src,
-      };
+      result.url = script.src;
 
       load(
         script.src,
         content => {
-          result[i].loaded = true;
-          result[i].content = content;
+          result.loaded = true;
+          result.content = content;
           check();
         },
         () => {
-          result[i].error = true;
+          result.error = true;
           check();
         },
       );
     } else {
-      result[i] = {
-        ...scriptData,
-        content: script.innerHTML,
-        loaded: true,
-        url: script.getAttribute("data-module") || null,
-      };
+      result.url = script.getAttribute("data-module") || null;
+      result.loaded = true;
+      result.content = script.innerHTML;
     }
-  });
+  }
 
   check();
 }
@@ -196,7 +226,10 @@ function loadScripts(transformFn, scripts) {
  * Run script tags with type="text/jsx".
  * @param {Array} scriptTags specify script tags to run, run all in the <head> if not given
  */
-export function runScripts(transformFn, scripts) {
+export function runScripts(
+  transformFn: typeof transform,
+  scripts?: HTMLCollectionOf<HTMLScriptElement>,
+) {
   headEl = document.getElementsByTagName("head")[0];
   if (!scripts) {
     scripts = document.getElementsByTagName("script");
@@ -208,7 +241,7 @@ export function runScripts(transformFn, scripts) {
     const script = scripts.item(i);
     // Support the old type="text/jsx;harmony=true"
     const type = script.type.split(";")[0];
-    if (scriptTypes.indexOf(type) !== -1) {
+    if (scriptTypes.has(type)) {
       jsxScripts.push(script);
     }
   }

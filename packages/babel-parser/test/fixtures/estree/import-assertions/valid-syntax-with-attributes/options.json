@@ -1,4 +1,10 @@
 {
-  "plugins": ["flow", "jsx", "estree", "importAssertions"],
+  "BABEL_8_BREAKING": false,
+  "plugins": [
+    "flow",
+    "jsx",
+    "estree",
+    "importAssertions"
+  ],
   "sourceType": "module"
 }

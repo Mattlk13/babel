@@ -1,10 +1,17 @@
-import eslint from "eslint";
+import { Linter, ESLint } from "eslint";
 import fs from "fs";
 import path from "path";
 import * as parser from "../../../../../babel-eslint-parser/lib/index.cjs";
 import { fileURLToPath } from "url";
+import {
+  babelESLintParserPath,
+  eslintConfigCompat,
+} from "../../../helpers/eslintConfigCompat.cjs";
 
-eslint.linter.defineParser("@babel/eslint-parser", parser);
+const linter = new Linter();
+if (parseInt(ESLint.version, 10) < 9) {
+  linter.defineParser(babelESLintParserPath, parser);
+}
 
 const paths = {
   fixtures: path.join(
@@ -18,8 +25,8 @@ const paths = {
 const encoding = "utf8";
 const errorLevel = 2;
 
-const baseEslintOpts = {
-  parser: "@babel/eslint-parser",
+const languageOptions = {
+  parser: parser,
   parserOptions: {
     sourceType: "script",
     requireConfigFile: false,
@@ -28,7 +35,7 @@ const baseEslintOpts = {
 };
 
 /**
- * Load a fixture and run eslint.linter.verify() on it.
+ * Load a fixture and run linter.verify() on it.
  * Pass the return value to done().
  * @param object opts
  * @param function done
@@ -37,7 +44,7 @@ function lint(opts) {
   return new Promise((resolve, reject) => {
     readFixture(opts.fixture, (err, src) => {
       if (err) return reject(err);
-      resolve(eslint.linter.verify(src, opts.eslint));
+      resolve(linter.verify(src, eslintConfigCompat(opts.eslint)));
     });
   });
 }
@@ -55,6 +62,7 @@ function readFixture(id, done) {
 // readFixture
 
 describe("Rules:", () => {
+  // eslint-disable-next-line jest/valid-describe-callback
   describe("`strict`", strictSuite);
 });
 
@@ -62,9 +70,10 @@ function strictSuite() {
   const ruleId = "strict";
 
   describe("when set to 'never'", () => {
-    const eslintOpts = Object.assign({}, baseEslintOpts, {
+    const eslintOpts = {
+      languageOptions,
       rules: {},
-    });
+    };
     eslintOpts.rules[ruleId] = [errorLevel, "never"];
 
     ["global-with", "function-with"].forEach(fixture => {
@@ -81,9 +90,10 @@ function strictSuite() {
   });
 
   describe("when set to 'global'", () => {
-    const eslintOpts = Object.assign({}, baseEslintOpts, {
+    const eslintOpts = {
+      languageOptions,
       rules: {},
-    });
+    };
     eslintOpts.rules[ruleId] = [errorLevel, "global"];
 
     it("shouldn't error on single global directive", async () => {
@@ -125,9 +135,10 @@ function strictSuite() {
   });
 
   describe("when set to 'function'", () => {
-    const eslintOpts = Object.assign({}, baseEslintOpts, {
+    const eslintOpts = {
+      languageOptions,
       rules: {},
-    });
+    };
     eslintOpts.rules[ruleId] = [errorLevel, "function"];
 
     it("shouldn't error on single function directive", async () => {

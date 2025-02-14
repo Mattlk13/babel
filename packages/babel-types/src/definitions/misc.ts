@@ -1,9 +1,13 @@
-import defineType, {
+import {
+  defineAliasedType,
   assertNodeType,
   assertOneOf,
   assertValueType,
-} from "./utils";
-import { PLACEHOLDERS } from "./placeholders";
+} from "./utils.ts";
+import { PLACEHOLDERS } from "./placeholders.ts";
+import { patternLikeCommon } from "./core.ts";
+
+const defineType = defineAliasedType("Miscellaneous");
 
 if (!process.env.BABEL_8_BREAKING) {
   defineType("Noop", {
@@ -22,6 +26,7 @@ defineType("Placeholder", {
     expectedNode: {
       validate: assertOneOf(...PLACEHOLDERS),
     },
+    ...patternLikeCommon(),
   },
 });
 

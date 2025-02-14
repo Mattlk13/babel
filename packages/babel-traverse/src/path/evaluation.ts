@@ -1,9 +1,48 @@
-import type NodePath from "./index";
+import type NodePath from "./index.ts";
+import type * as t from "@babel/types";
 
 // This file contains Babels metainterpreter that can evaluate static code.
 
-const VALID_CALLEES = ["String", "Number", "Math"];
-const INVALID_METHODS = ["random"];
+const VALID_OBJECT_CALLEES = ["Number", "String", "Math"] as const;
+const VALID_IDENTIFIER_CALLEES = [
+  "isFinite",
+  "isNaN",
+  "parseFloat",
+  "parseInt",
+  "decodeURI",
+  "decodeURIComponent",
+  "encodeURI",
+  "encodeURIComponent",
+  process.env.BABEL_8_BREAKING ? "btoa" : null,
+  process.env.BABEL_8_BREAKING ? "atob" : null,
+] as const;
+
+const INVALID_METHODS = ["random"] as const;
+
+function isValidObjectCallee(
+  val: string,
+): val is (typeof VALID_OBJECT_CALLEES)[number] {
+  return VALID_OBJECT_CALLEES.includes(
+    // @ts-expect-error val is a string
+    val,
+  );
+}
+
+function isValidIdentifierCallee(
+  val: string,
+): val is (typeof VALID_IDENTIFIER_CALLEES)[number] {
+  return VALID_IDENTIFIER_CALLEES.includes(
+    // @ts-expect-error val is a string
+    val,
+  );
+}
+
+function isInvalidMethod(val: string): val is (typeof INVALID_METHODS)[number] {
+  return INVALID_METHODS.includes(
+    // @ts-expect-error val is a string
+    val,
+  );
+}
 
 /**
  * Walk the input `node` and statically evaluate if it's truthy.
@@ -28,14 +67,30 @@ export function evaluateTruthy(this: NodePath): boolean {
   if (res.confident) return !!res.value;
 }
 
+type State = {
+  confident: boolean;
+  deoptPath: NodePath | null;
+  seen: Map<t.Node, Result>;
+};
+
+type Result = {
+  resolved: boolean;
+  value?: any;
+};
 /**
  * Deopts the evaluation
  */
-function deopt(path, state) {
+function deopt(path: NodePath, state: State) {
   if (!state.confident) return;
   state.deoptPath = path;
   state.confident = false;
 }
+
+const Globals = new Map([
+  ["undefined", undefined],
+  ["Infinity", Infinity],
+  ["NaN", NaN],
+]);
 
 /**
  * We wrap the _evaluate method so we can track `seen` nodes, we push an item
@@ -45,7 +100,7 @@ function deopt(path, state) {
  *   var g = a ? 1 : 2,
  *       a = g * this.foo
  */
-function evaluateCached(path: NodePath, state) {
+function evaluateCached(path: NodePath, state: State): any {
   const { node } = path;
   const { seen } = state;
 
@@ -58,8 +113,7 @@ function evaluateCached(path: NodePath, state) {
       return;
     }
   } else {
-    // todo: create type annotation for state instead
-    const item: { resolved: boolean; value?: any } = { resolved: false };
+    const item: Result = { resolved: false };
     seen.set(node, item);
 
     const val = _evaluate(path, state);
@@ -71,7 +125,7 @@ function evaluateCached(path: NodePath, state) {
   }
 }
 
-function _evaluate(path: NodePath, state) {
+function _evaluate(path: NodePath, state: State): any {
   if (!state.confident) return;
 
   if (path.isSequenceExpression()) {
@@ -134,20 +188,32 @@ function _evaluate(path: NodePath, state) {
     return evaluateCached(path.get("expression"), state);
   }
 
-  // "foo".length
+  // "foo".length, "foo"[0]
   if (
     path.isMemberExpression() &&
     !path.parentPath.isCallExpression({ callee: path.node })
   ) {
-    const property = path.get("property") as NodePath;
-    const object = path.get("object") as NodePath;
+    const property = path.get("property");
+    const object = path.get("object");
 
-    if (object.isLiteral() && property.isIdentifier()) {
+    if (object.isLiteral()) {
       // @ts-expect-error todo(flow->ts): instead of typeof - would it be better to check type of ast node?
       const value = object.node.value;
       const type = typeof value;
-      if (type === "number" || type === "string") {
-        return value[property.node.name];
+
+      let key = null;
+      if (path.node.computed) {
+        key = evaluateCached(property, state);
+        if (!state.confident) return;
+      } else if (property.isIdentifier()) {
+        key = property.node.name;
+      }
+      if (
+        (type === "number" || type === "string") &&
+        key != null &&
+        (typeof key === "number" || typeof key === "string")
+      ) {
+        return value[key];
       }
     }
   }
@@ -155,31 +221,34 @@ function _evaluate(path: NodePath, state) {
   if (path.isReferencedIdentifier()) {
     const binding = path.scope.getBinding(path.node.name);
 
-    if (binding && binding.constantViolations.length > 0) {
-      return deopt(binding.path, state);
+    if (binding) {
+      if (
+        binding.constantViolations.length > 0 ||
+        path.node.start < binding.path.node.end
+      ) {
+        deopt(binding.path, state);
+        return;
+      }
+      if (binding.hasValue) {
+        return binding.value;
+      }
     }
 
-    if (binding && path.node.start < binding.path.node.end) {
-      return deopt(binding.path, state);
+    const name = path.node.name;
+    if (Globals.has(name)) {
+      if (!binding) {
+        return Globals.get(name);
+      }
+      deopt(binding.path, state);
+      return;
     }
 
-    if (binding?.hasValue) {
-      return binding.value;
+    const resolved = path.resolve();
+    if (resolved === path) {
+      deopt(path, state);
+      return;
     } else {
-      if (path.node.name === "undefined") {
-        return binding ? deopt(binding.path, state) : undefined;
-      } else if (path.node.name === "Infinity") {
-        return binding ? deopt(binding.path, state) : Infinity;
-      } else if (path.node.name === "NaN") {
-        return binding ? deopt(binding.path, state) : NaN;
-      }
-
-      const resolved = path.resolve();
-      if (resolved === path) {
-        return deopt(path, state);
-      } else {
-        return evaluateCached(resolved, state);
-      }
+      return evaluateCached(resolved, state);
     }
   }
 
@@ -222,7 +291,8 @@ function _evaluate(path: NodePath, state) {
       if (elemValue.confident) {
         arr.push(elemValue.value);
       } else {
-        return deopt(elemValue.deopt, state);
+        deopt(elemValue.deopt, state);
+        return;
       }
     }
     return arr;
@@ -233,29 +303,33 @@ function _evaluate(path: NodePath, state) {
     const props = path.get("properties");
     for (const prop of props) {
       if (prop.isObjectMethod() || prop.isSpreadElement()) {
-        return deopt(prop, state);
+        deopt(prop, state);
+        return;
       }
-      const keyPath: any = prop.get("key");
-      let key = keyPath;
-      // @ts-expect-error todo(flow->ts): type refinement issues ObjectMethod and SpreadElement somehow not excluded
+      const keyPath = prop.get("key");
+      let key;
       if (prop.node.computed) {
-        key = key.evaluate();
+        key = keyPath.evaluate();
         if (!key.confident) {
-          return deopt(key.deopt, state);
+          deopt(key.deopt, state);
+          return;
         }
         key = key.value;
-      } else if (key.isIdentifier()) {
-        key = key.node.name;
+      } else if (keyPath.isIdentifier()) {
+        key = keyPath.node.name;
       } else {
-        key = key.node.value;
+        key = (
+          keyPath.node as t.StringLiteral | t.NumericLiteral | t.BigIntLiteral
+        ).value;
       }
-      // todo(flow->ts): remove typecast
-      const valuePath = prop.get("value") as NodePath;
+      const valuePath = prop.get("value");
       let value = valuePath.evaluate();
       if (!value.confident) {
-        return deopt(value.deopt, state);
+        deopt(value.deopt, state);
+        return;
       }
       value = value.value;
+      // @ts-expect-error key is any type
       obj[key] = value;
     }
     return obj;
@@ -284,6 +358,11 @@ function _evaluate(path: NodePath, state) {
         if (!state.confident) return;
 
         return left && right;
+      case "??":
+        state.confident = leftConfident && (left != null || rightConfident);
+        if (!state.confident) return;
+
+        return left ?? right;
     }
   }
 
@@ -317,7 +396,7 @@ function _evaluate(path: NodePath, state) {
       case "==":
         return left == right; // eslint-disable-line eqeqeq
       case "!=":
-        return left != right;
+        return left != right; // eslint-disable-line eqeqeq
       case "===":
         return left === right;
       case "!==":
@@ -346,25 +425,28 @@ function _evaluate(path: NodePath, state) {
     if (
       callee.isIdentifier() &&
       !path.scope.getBinding(callee.node.name) &&
-      VALID_CALLEES.indexOf(callee.node.name) >= 0
+      (isValidObjectCallee(callee.node.name) ||
+        isValidIdentifierCallee(callee.node.name))
     ) {
       func = global[callee.node.name];
     }
 
     if (callee.isMemberExpression()) {
       const object = callee.get("object");
-      // todo: improve babel-types
-      const property = callee.get("property") as NodePath;
+      const property = callee.get("property");
 
       // Math.min(1, 2)
       if (
         object.isIdentifier() &&
         property.isIdentifier() &&
-        VALID_CALLEES.indexOf(object.node.name) >= 0 &&
-        INVALID_METHODS.indexOf(property.node.name) < 0
+        isValidObjectCallee(object.node.name) &&
+        !isInvalidMethod(property.node.name)
       ) {
         context = global[object.node.name];
-        func = context[property.node.name];
+        const key = property.node.name;
+        if (Object.hasOwn(context, key)) {
+          func = context[key as keyof typeof context];
+        }
       }
 
       // "abc".charCodeAt(4)
@@ -390,11 +472,18 @@ function _evaluate(path: NodePath, state) {
   deopt(path, state);
 }
 
-function evaluateQuasis(path, quasis: Array<any>, state, raw = false) {
+function evaluateQuasis(
+  path: NodePath<t.TaggedTemplateExpression | t.TemplateLiteral>,
+  quasis: Array<any>,
+  state: State,
+  raw = false,
+) {
   let str = "";
 
   let i = 0;
-  const exprs = path.get("expressions");
+  const exprs: Array<NodePath<t.Node>> = path.isTemplateLiteral()
+    ? path.get("expressions")
+    : path.get("quasi.expressions");
 
   for (const elem of quasis) {
     // not confident, evaluated an expression we don't like
@@ -433,7 +522,7 @@ export function evaluate(this: NodePath): {
   value: any;
   deopt?: NodePath;
 } {
-  const state = {
+  const state: State = {
     confident: true,
     deoptPath: null,
     seen: new Map(),

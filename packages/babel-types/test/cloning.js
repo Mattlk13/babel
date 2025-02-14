@@ -1,5 +1,7 @@
-import * as t from "../lib";
+import * as t from "../lib/index.js";
 import { parse } from "@babel/parser";
+import _generate from "@babel/generator";
+const generate = _generate.default || _generate;
 
 describe("cloneNode", function () {
   it("should handle undefined", function () {
@@ -150,5 +152,23 @@ describe("cloneNode", function () {
     expect(cloned.declarations[0].id.leadingComments[0].loc).toBe(null);
     expect(cloned.declarations[0].id.innerComments[0].loc).toBe(null);
     expect(cloned.declarations[0].id.trailingComments[0].loc).toBe(null);
+  });
+
+  it("should generate same code after deep cloning", function () {
+    let code = `//test1
+    /*test2*/var/*test3*/ a = 1/*test4*/;//test5
+    //test6
+    var b;
+    `;
+    code = generate(parse(code), { retainLines: true }).code;
+
+    const ast = t.cloneNode(
+      parse(code),
+      /* deep */ true,
+      /* withoutLoc */ false,
+    );
+    const newCode = generate(ast, { retainLines: true }).code;
+
+    expect(newCode).toBe(code);
   });
 });

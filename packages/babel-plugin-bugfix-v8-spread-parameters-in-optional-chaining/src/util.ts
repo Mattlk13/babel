@@ -1,12 +1,11 @@
 import { skipTransparentExprWrappers } from "@babel/helper-skip-transparent-expression-wrappers";
-import type { NodePath } from "@babel/traverse";
-import { types as t } from "@babel/core";
+import { types as t, type NodePath } from "@babel/core";
 // https://crbug.com/v8/11558
 
 // check if there is a spread element followed by another argument.
 // (...[], 0) or (...[], ...[])
 
-function matchAffectedArguments(argumentNodes) {
+function matchAffectedArguments(argumentNodes: t.CallExpression["arguments"]) {
   const spreadIndex = argumentNodes.findIndex(node => t.isSpreadElement(node));
   return spreadIndex >= 0 && spreadIndex !== argumentNodes.length - 1;
 }
@@ -23,18 +22,16 @@ export function shouldTransform(
   path: NodePath<t.OptionalMemberExpression | t.OptionalCallExpression>,
 ): boolean {
   let optionalPath: NodePath<t.Expression> = path;
-  const chains = [];
-  while (
-    optionalPath.isOptionalMemberExpression() ||
-    optionalPath.isOptionalCallExpression()
-  ) {
-    const { node } = optionalPath;
-    chains.push(node);
-
+  const chains: (t.OptionalCallExpression | t.OptionalMemberExpression)[] = [];
+  for (;;) {
     if (optionalPath.isOptionalMemberExpression()) {
+      chains.push(optionalPath.node);
       optionalPath = skipTransparentExprWrappers(optionalPath.get("object"));
     } else if (optionalPath.isOptionalCallExpression()) {
+      chains.push(optionalPath.node);
       optionalPath = skipTransparentExprWrappers(optionalPath.get("callee"));
+    } else {
+      break;
     }
   }
   for (let i = 0; i < chains.length; i++) {

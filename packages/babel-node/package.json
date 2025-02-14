@@ -1,6 +1,6 @@
 {
   "name": "@babel/node",
-  "version": "7.15.8",
+  "version": "7.26.0",
   "description": "Babel command line",
   "author": "The Babel Team (https://babel.dev/team)",
   "homepage": "https://babel.dev/docs/en/next/babel-node",
@@ -23,28 +23,54 @@
     "compiler"
   ],
   "dependencies": {
-    "@babel/register": "workspace:^7.15.3",
-    "commander": "^4.0.1",
-    "core-js": "^3.16.0",
-    "node-environment-flags": "^1.0.5",
-    "regenerator-runtime": "^0.13.4",
-    "v8flags": "^3.1.1"
+    "@babel/register": "workspace:^",
+    "commander": "condition:BABEL_8_BREAKING ? ^12.1.0 : ^6.2.0 (esm:program|default)",
+    "core-js": "^3.30.2",
+    "node-environment-flags": "condition:BABEL_8_BREAKING ? : ^1.0.5",
+    "regenerator-runtime": "^0.14.0",
+    "v8flags": "condition:BABEL_8_BREAKING ? ^4.0.1 : ^3.1.1"
   },
   "peerDependencies": {
     "@babel/core": "^7.0.0-0"
   },
   "devDependencies": {
-    "@babel/core": "workspace:*",
-    "@babel/helper-fixtures": "workspace:*",
-    "@babel/runtime": "workspace:*",
-    "fs-readdir-recursive": "^1.0.0",
-    "make-dir": "condition:BABEL_8_BREAKING ? : ^2.1.0",
-    "rimraf": "^3.0.0"
+    "@babel/core": "workspace:^",
+    "@babel/helper-transform-fixture-test-runner": "workspace:^",
+    "@babel/preset-env": "workspace:^",
+    "@babel/preset-react": "workspace:^",
+    "@babel/runtime": "workspace:^",
+    "@types/v8flags": "^3.1.1"
   },
   "bin": {
     "babel-node": "./bin/babel-node.js"
   },
   "engines": {
     "node": ">=6.9.0"
-  }
+  },
+  "conditions": {
+    "BABEL_8_BREAKING": [
+      {
+        "engines": {
+          "node": "^18.20.0 || ^20.17.0 || >=22.8.0"
+        }
+      },
+      {
+        "exports": null
+      }
+    ],
+    "USE_ESM": [
+      null,
+      {
+        "type": "commonjs"
+      }
+    ]
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "type": "module"
 }

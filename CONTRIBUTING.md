@@ -37,18 +37,18 @@ Feel free to check out the `#discussion`/`#development` channels on our [Slack](
 
 ## Developing
 
-_Node_: Check that Node is [installed](https://nodejs.org/en/download/) with version `^12.20 || >= 14.13`. You can check this with `node -v`.
+_Node_: Check that Node is [installed](https://nodejs.org/en/download/) with version `^20.10.0 || >=22.0.0`. You can check this with `node -v`.
 
-_Yarn_: Make sure that Yarn 1 is [installed](https://classic.yarnpkg.com/en/docs/install) with version >= `1.19.0`.
+_Yarn_: Make sure that Yarn is [installed](https://yarnpkg.com/getting-started/install) with version `>=4.0.0`.
 
 _Make_: If you are running Windows 10, you'll need to do one of the following:
 
-- Clone the repository and run the commands inside [WSL 2](https://docs.microsoft.com/en-us/windows/wsl/install-win10).
-- Install [Make for Windows](http://gnuwin32.sourceforge.net/packages/make.htm).
+- Run the commands inside [WSL 2](https://docs.microsoft.com/en-us/windows/wsl/install-win10).
+- Using make normally (`make` or `./make`), it will automatically call the cross-platform `Makefile.mjs`. (There may be a small part of the function not implemented.)
 
 ### Setup
 
-Fork the `babel` repository to your GitHub Account.
+[Fork](https://github.com/babel/babel/fork) the `babel` repository to your GitHub Account.
 
 Then, run:
 
@@ -80,12 +80,29 @@ If you wish to build a copy of Babel for distribution, then run:
 $ make build-dist
 ```
 
+### Develop compiling to CommonJS or to ECMAScript modules
+
+Babel can currently be compiled both to CJS and to ESM. You can toggle between those two
+modes by running one of the following commands:
+
+```sh
+make use-esm
+```
+
+```sh
+make use-cjs
+```
+
+Note that they need to recompile the whole monorepo, so please make sure to stop any running `make watch` process before running them.
+
+If you never run a `make use-*` (or if you delete the `.module-type` file that they generate), our build process defaults to CJS.
+
 ### Running linting/tests
 
 #### Lint
 
 ```sh
-# ~6 sec on a MacBook Pro (Mid 2015)
+# ~19 sec on a MacBook Pro (Late 2021)
 $ make lint
 ```
 
@@ -98,91 +115,119 @@ $ make fix
 #### Tests + lint for all packages (slow) via:
 
 ```sh
-# ~46 sec on a MacBook Pro (Mid 2015)
+# ~32 sec on a MacBook Pro (Late 2021)
 $ make test
 ```
 
 #### All tests:
 
 ```sh
-# ~40 sec on a MacBook Pro (Mid 2015)
-$ make test-only
+# ~13 sec on a MacBook Pro (Late 2021)
+$ yarn jest
+```
+
+#### Run tests for Babel 8
+
+```sh
+$ BABEL_8_BREAKING=true yarn jest
 ```
 
 #### Run tests for a specific package
 
-When working on an issue, you will most likely want to focus on a particular [packages](https://github.com/babel/babel/tree/main/packages). Using `TEST_ONLY` will only run tests for that specific package.
+When working on an issue, you will most likely want to focus on a particular [packages](https://github.com/babel/babel/tree/main/packages). For example, to run tests on `babel-cli`:
 
 ```sh
-$ TEST_ONLY=babel-cli make test
+$ yarn jest babel-cli
 ```
 
 <details>
   <summary>More options</summary>
-  <code>TEST_ONLY</code> will also match substrings of the package name:
+  It will also match substrings of the package name:
 
-  ```sh
-  # Run tests for the @babel/plugin-transform-classes package.
-  $ TEST_ONLY=babel-plugin-transform-classes make test
-  ```
+```sh
+# Run tests for the @babel/plugin-transform-classes package.
+$ yarn jest classes
+```
 
-  Or you can use Yarn: 
+Or you can use the `TEST_ONLY` environment variable:
 
-  ```sh
-  $ yarn jest babel-cli
-  ```
+```sh
+$ TEST_ONLY=babel-cli make test-only
+```
+
 </details>
 <br>
 
 #### Run a subset of tests
 
-Use the `TEST_GREP` variable to run a subset of tests by name:
+Use the [Jest CLI `-t` option](https://jestjs.io/docs/cli#--testnamepatternregex) to run a subset of tests with a name that matches the regex:
 
 ```sh
-$ TEST_GREP=transformation make test
+$ yarn jest -t transformation
 ```
 
 Substitute spaces for hyphens and forward slashes when targeting specific test names:
 
 For example, for the following path:
+
 ```sh
 packages/babel-plugin-transform-arrow-functions/test/fixtures/arrow-functions/destructuring-parameters
 ```
 
 You can use:
-```sh
-$ TEST_GREP="arrow functions destructuring parameters" make test
-```
 
-Or you can directly use Yarn:
 ```sh
 $ yarn jest -t "arrow functions destructuring parameters"
 ```
 
-#### Run test with Node debugger
-
-To enable the Node.js debugger, set the <code>TEST_DEBUG</code> environment variable:
+Or you can use the `TEST_GREP` environment variable:
 
 ```sh
-$ TEST_DEBUG=true make test
+$ TEST_GREP="arrow functions destructuring parameters" make test-only
+```
+
+#### Run test with Node debugger
+
+To enable the Node.js debugger, run node with `--inspect-brk` option and include the [Jest CLI `-i` option](https://jestjs.io/docs/cli#--runinband) or you [may not hit breakpoints with the chrome debugger](https://github.com/nodejs/node/issues/26609).
+
+```sh
+yarn run --inspect-brk jest -i packages/package-to-test
 ```
 
 <details>
   <summary>More options</summary>
-  Or you can directly use Yarn
 
-  ```sh
-  $ yarn node --inspect-brk node_modules/jest/bin/jest.js --runInBand
-  ```
+You can also set the <code>TEST_DEBUG</code> environment variable
+
+```sh
+$ TEST_DEBUG=true make test-only
+```
+
 </details>
 <br>
 
-You can combine `TEST_DEBUG` with `TEST_GREP` or `TEST_ONLY` to debug a subset of tests. If you plan to stay long in the debugger (which you'll likely do!), you may increase the test timeout by editing [test/testSetupFile.js](https://github.com/babel/babel/blob/main/test/testSetupFile.js).
+You can combine `-i` with `-t` to debug a subset of tests. For example,
+
+```sh
+yarn run --inspect-brk jest -i babel-plugin-arrow-functions -t "destructuring parameters"
+```
+
+If you plan to stay long in the debugger (which you'll likely do!), you may increase the test timeout by the [Jest CLI `--testTimeout` option](https://jestjs.io/docs/cli#--testtimeoutnumber). For example to increase test timeout to 500 seconds
+
+```sh
+yarn run --inspect-brk jest -i babel-parser -t "my new test" --testTimeout=500000
+```
 
 To overwrite any test fixtures when fixing a bug or anything, add the env variable `OVERWRITE=true`
 
 ```sh
-$ OVERWRITE=true TEST_ONLY=babel-plugin-transform-classes make test-only
+$ OVERWRITE=true yarn jest babel-plugin-transform-classes
+```
+
+Sometimes you may have to update Babel 8 test fixtures as well, run `OVERWRITE=true` with `BABEL_8_BREAKING=true`:
+
+```sh
+$ BABEL_8_BREAKING=true OVERWRITE=true yarn jest babel-parser
 ```
 
 #### Test coverage
@@ -190,8 +235,7 @@ $ OVERWRITE=true TEST_ONLY=babel-plugin-transform-classes make test-only
 To test the code coverage, use:
 
 ```sh
-$ BABEL_ENV=cov make build
-$ ./scripts/test-cov.sh
+make test-cov
 ```
 
 #### Troubleshooting Tests
@@ -224,7 +268,7 @@ For example, in [`@babel/plugin-transform-exponentiation-operator/test`](https:/
 
 - In each subfolder, you can organize your directory structure by categories of tests. (Example: these folders can be named after the feature you are testing or can reference the issue number they fix)
 - Generally, there are two kinds of tests for plugins
-    - The first is a simple test of the input and output produced by running Babel on some code. We do this by creating an [`input.js`](https://github.com/babel/babel/blob/main/packages/babel-plugin-transform-exponentiation-operator/test/fixtures/exponentian-operator/binary/input.js) file and an [`output.js`](https://github.com/babel/babel/blob/main/packages/babel-plugin-transform-exponentiation-operator/test/fixtures/exponentian-operator/binary/output.js) file. This kind of test only works in sub-subdirectories of `/fixtures`, i.e. `/fixtures/exponentian-operator/binary/input.js` and **not** `/fixtures/exponentian-operator/input.js`.
+    - The first is a simple test of the input and output produced by running Babel on some code. We do this by creating an [`input.js`](https://github.com/babel/babel/blob/main/packages/babel-plugin-transform-exponentiation-operator/test/fixtures/exponentian-operator/binary/input.js) file and an [`output.js`](https://github.com/babel/babel/blob/main/packages/babel-plugin-transform-exponentiation-operator/test/fixtures/exponentian-operator/binary/output.js) file. This kind of test only works in sub-subdirectories of `/fixtures`, i.e. `/fixtures/exponentiation-operator/binary/input.js` and **not** `/fixtures/exponentiation-operator/input.js`.
   - If you need to expect an error, you can ignore creating the `output.js` file and pass a new `throws` key to the `options.json` that contains the error string that is created.
   - The second and preferred type is a test that actually evaluates the produced code and asserts that certain properties are true or false. We do this by creating an [`exec.js`](https://github.com/babel/babel/blob/main/packages/babel-plugin-transform-exponentiation-operator/test/fixtures/exponentian-operator/comprehensive/exec.js) file.
 
@@ -273,7 +317,7 @@ Other than normal Babel options, `options.json` can contain other properties to 
 
 - **`minNodeVersion`** (string)
 
-  If the test requires a minimum Node version, you can add `minNodeVersion` (must be in semver format).
+  If an `exec.js`` test requires a minimum Node version, you can add `minNodeVersion` (must be in semver format).
 
   ```jsonc
   // options.json example
@@ -281,6 +325,8 @@ Other than normal Babel options, `options.json` can contain other properties to 
     "minNodeVersion": "5.0.0"
   }
   ```
+
+  Use `minNodeVersionTransform` if an `input.js` test requires a minimum Node version.
 
 - **`externalHelpers`** (boolean)
 
@@ -334,6 +380,15 @@ For both `@babel/plugin-x` and `@babel/parser`, you can easily generate an `outp
               - output.json (will be generated if not created)
 ```
 
+#### Editor setup
+
+We have JSON Schema definitions so that your editor can provide autocomplete for `options.json` files in fixtures:
+
+- `./packages/babel-helper-fixtures/data/schema.json` for plugins/presets tests
+- `./packages/babel-parser/test/schema.json` for parser tests
+
+If you use VS Code you can copy the contents of `.vscode/settings.example.json` into `.vscode/settings.json` to make it use the JSON Schema definitions. Other editors have different options to load JSON Schema files.
+
 ### Debugging code
 
 A common approach to debugging JavaScript code is to walk through the code using the [Chrome DevTools](https://developers.google.com/web/tools/chrome-devtools/) debugger.
@@ -378,7 +433,7 @@ Note that the code shown in Chrome DevTools is compiled code and therefore diffe
 - After the ESTree PR is accepted, update [ast/spec.md](https://github.com/babel/babel/blob/master/packages/babel-parser/ast/spec.md). Note that there are differences between Babel AST and ESTree. In these cases, consistency with current Babel AST outweighs alignment to ESTree. Otherwise it should follow ESTree.
 
 - [ ] Implement parser plugins based on the new AST. The parser plugin name should be the unprefixed slug of the TC39 proposal URL in _camelcase_, i.e. `exportDefaultFrom` from `https://github.com/tc39/proposal-export-default-from`.
-  - [ ] Use the `this.expectPlugin("newSyntax")` check within `@babel/parser` to ensure your new plugin code only runs when that flag is turned on (not default behavior), and a friendly error is thrown if users forget to enable a plugin.
+  - [ ] Use the `this.expectPlugin("pluginName")` check within `@babel/parser` to ensure your new plugin code only runs when that flag is turned on (not default behavior), and a friendly error is thrown if users forget to enable a plugin. You can also supply an array pair to require certain configuration options, e.g., `this.expectPlugin(["pluginName", { configOption: value }])`.
   - [ ] Add failing/passing tests according to spec behavior
   - [ ] Add `@babel/syntax-new-syntax` package. You can copy `packages/babel-plugin-syntax-decimal` and replace `decimal` to `new-syntax`.
   - [ ] Add `@babel/syntax-new-syntax` to `@babel/standalone`.

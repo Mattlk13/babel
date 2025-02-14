@@ -1,38 +1,41 @@
-import { template, traverse, types as t } from "@babel/core";
-import type { File } from "@babel/core";
-import type { NodePath, Scope, Visitor, Binding } from "@babel/traverse";
-import { environmentVisitor } from "@babel/helper-replace-supers";
+import { template, types as t } from "@babel/core";
+import type { File, NodePath, Scope, Visitor } from "@babel/core";
+import { visitors } from "@babel/traverse";
 
-const findBareSupers = traverse.visitors.merge([
-  {
-    Super(path: NodePath<t.Super>) {
-      const { node, parentPath } = path;
-      if (parentPath.isCallExpression({ callee: node })) {
-        this.push(parentPath);
-      }
-    },
+const findBareSupers = visitors.environmentVisitor<
+  NodePath<t.CallExpression>[]
+>({
+  Super(path) {
+    const { node, parentPath } = path;
+    if (parentPath.isCallExpression({ callee: node })) {
+      this.push(parentPath);
+    }
   },
-  environmentVisitor,
-]);
+});
 
-const referenceVisitor = {
-  "TSTypeAnnotation|TypeAnnotation"(path: NodePath) {
+const referenceVisitor: Visitor<{ scope: Scope }> = {
+  "TSTypeAnnotation|TypeAnnotation"(
+    path: NodePath<t.TSTypeAnnotation | t.TypeAnnotation>,
+  ) {
     path.skip();
   },
 
-  ReferencedIdentifier(path: NodePath<t.Identifier>) {
-    if (this.scope.hasOwnBinding(path.node.name)) {
-      this.scope.rename(path.node.name);
+  ReferencedIdentifier(path: NodePath<t.Identifier>, { scope }) {
+    if (scope.hasOwnBinding(path.node.name)) {
+      scope.rename(path.node.name);
       path.skip();
     }
   },
 };
+
+type HandleClassTDZState = {
+  classBinding: Scope.Binding;
+  file: File;
+};
+
 function handleClassTDZ(
   path: NodePath<t.Identifier>,
-  state: {
-    classBinding: Binding;
-    file: File;
-  },
+  state: HandleClassTDZState,
 ) {
   if (
     state.classBinding &&
@@ -48,7 +51,7 @@ function handleClassTDZ(
   }
 }
 
-const classFieldDefinitionEvaluationTDZVisitor = {
+const classFieldDefinitionEvaluationTDZVisitor: Visitor<HandleClassTDZState> = {
   ReferencedIdentifier: handleClassTDZ,
 };
 
@@ -59,8 +62,9 @@ interface RenamerState {
 export function injectInitialization(
   path: NodePath<t.Class>,
   constructor: NodePath<t.ClassMethod> | undefined,
-  nodes: t.Statement[],
+  nodes: t.ExpressionStatement[],
   renamer?: (visitor: Visitor<RenamerState>, state: RenamerState) => void,
+  lastReturnsThis?: boolean,
 ) {
   if (!nodes.length) return;
 
@@ -89,15 +93,24 @@ export function injectInitialization(
   }
 
   if (isDerived) {
-    const bareSupers = [];
+    const bareSupers: NodePath<t.CallExpression>[] = [];
     constructor.traverse(findBareSupers, bareSupers);
     let isFirst = true;
     for (const bareSuper of bareSupers) {
       if (isFirst) {
-        bareSuper.insertAfter(nodes);
         isFirst = false;
       } else {
-        bareSuper.insertAfter(nodes.map(n => t.cloneNode(n)));
+        nodes = nodes.map(n => t.cloneNode(n));
+      }
+      if (!bareSuper.parentPath.isExpressionStatement()) {
+        const allNodes: t.Expression[] = [
+          bareSuper.node,
+          ...nodes.map(n => t.toExpression(n)),
+        ];
+        if (!lastReturnsThis) allNodes.push(t.thisExpression());
+        bareSuper.replaceWith(t.sequenceExpression(allNodes));
+      } else {
+        bareSuper.insertAfter(nodes);
       }
     }
   } else {
@@ -105,15 +118,60 @@ export function injectInitialization(
   }
 }
 
+type ComputedKeyAssignmentExpression = t.AssignmentExpression & {
+  left: t.Identifier;
+};
+
+/**
+ * Try to memoise a computed key.
+ * It returns undefined when the computed key is an uid reference, otherwise
+ * an assignment expression `memoiserId = computed key`
+ * @export
+ * @param {t.Expression} keyNode Computed key
+ * @param {Scope} scope The scope where memoiser id should be registered
+ * @param {string} hint The memoiser id hint
+ * @returns {(ComputedKeyAssignmentExpression | undefined)}
+ */
+export function memoiseComputedKey(
+  keyNode: t.Expression,
+  scope: Scope,
+  hint: string,
+): ComputedKeyAssignmentExpression | undefined {
+  const isUidReference = t.isIdentifier(keyNode) && scope.hasUid(keyNode.name);
+  if (isUidReference) {
+    return;
+  }
+  const isMemoiseAssignment =
+    t.isAssignmentExpression(keyNode, { operator: "=" }) &&
+    t.isIdentifier(keyNode.left) &&
+    scope.hasUid(keyNode.left.name);
+  if (isMemoiseAssignment) {
+    return t.cloneNode(keyNode as ComputedKeyAssignmentExpression);
+  } else {
+    const ident = t.identifier(hint);
+    // Declaring in the same block scope
+    // Ref: https://github.com/babel/babel/pull/10029/files#diff-fbbdd83e7a9c998721c1484529c2ce92
+    scope.push({
+      id: ident,
+      kind: "let",
+    });
+    return t.assignmentExpression(
+      "=",
+      t.cloneNode(ident),
+      keyNode,
+    ) as ComputedKeyAssignmentExpression;
+  }
+}
+
 export function extractComputedKeys(
-  ref: t.Identifier,
   path: NodePath<t.Class>,
   computedPaths: NodePath<t.ClassProperty | t.ClassMethod>[],
   file: File,
 ) {
-  const declarations: t.Statement[] = [];
+  const { scope } = path;
+  const declarations: t.ExpressionStatement[] = [];
   const state = {
-    classBinding: path.node.id && path.scope.getBinding(path.node.id.name),
+    classBinding: path.node.id && scope.getBinding(path.node.id.name),
     file,
   };
   for (const computedPath of computedPaths) {
@@ -128,21 +186,15 @@ export function extractComputedKeys(
     // Make sure computed property names are only evaluated once (upon class definition)
     // and in the right order in combination with static properties
     if (!computedKey.isConstantExpression()) {
-      const ident = path.scope.generateUidIdentifierBasedOnNode(
-        computedNode.key,
+      const assignment = memoiseComputedKey(
+        computedKey.node,
+        scope,
+        scope.generateUidBasedOnNode(computedKey.node),
       );
-      // Declaring in the same block scope
-      // Ref: https://github.com/babel/babel/pull/10029/files#diff-fbbdd83e7a9c998721c1484529c2ce92
-      path.scope.push({
-        id: ident,
-        kind: "let",
-      });
-      declarations.push(
-        t.expressionStatement(
-          t.assignmentExpression("=", t.cloneNode(ident), computedNode.key),
-        ),
-      );
-      computedNode.key = t.cloneNode(ident);
+      if (assignment) {
+        declarations.push(t.expressionStatement(assignment));
+        computedNode.key = t.cloneNode(assignment.left);
+      }
     }
   }
 

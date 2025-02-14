@@ -1,9 +1,18 @@
-import NodePath from "./path";
+import NodePath from "./path/index.ts";
 import { VISITOR_KEYS } from "@babel/types";
-import type Scope from "./scope";
+import type Scope from "./scope/index.ts";
+import type { ExplodedTraverseOptions } from "./index.ts";
+import type * as t from "@babel/types";
+import type { Visitor } from "./types.ts";
+import { popContext, pushContext, resync } from "./path/context.ts";
 
-export default class TraversalContext {
-  constructor(scope, opts, state, parentPath) {
+export default class TraversalContext<S = unknown> {
+  constructor(
+    scope: Scope,
+    opts: ExplodedTraverseOptions<S>,
+    state: S,
+    parentPath: NodePath,
+  ) {
     this.parentPath = parentPath;
     this.scope = scope;
     this.state = state;
@@ -12,8 +21,8 @@ export default class TraversalContext {
 
   declare parentPath: NodePath;
   declare scope: Scope;
-  declare state;
-  declare opts;
+  declare state: S;
+  declare opts: ExplodedTraverseOptions<S>;
   queue: Array<NodePath> | null = null;
   priorityQueue: Array<NodePath> | null = null;
 
@@ -22,8 +31,8 @@ export default class TraversalContext {
    * visit a node. This will prevent us from constructing a NodePath.
    */
 
-  shouldVisit(node): boolean {
-    const opts = this.opts;
+  shouldVisit(node: t.Node): boolean {
+    const opts = this.opts as Visitor;
     if (opts.enter || opts.exit) return true;
 
     // check if we have a visitor for this node
@@ -35,25 +44,35 @@ export default class TraversalContext {
 
     // we need to traverse into this node so ensure that it has children to traverse into!
     for (const key of keys) {
-      if (node[key]) return true;
+      if (
+        // @ts-expect-error key is from visitor keys
+        node[key]
+      ) {
+        return true;
+      }
     }
 
     return false;
   }
 
-  create(node, obj, key, listKey?): NodePath {
+  create(
+    node: t.Node,
+    container: t.Node | t.Node[],
+    key: string | number,
+    listKey?: string,
+  ): NodePath {
     // We don't need to `.setContext()` here, since `.visitQueue()` already
     // calls `.pushContext`.
     return NodePath.get({
       parentPath: this.parentPath,
       parent: node,
-      container: obj,
+      container,
       key: key,
       listKey,
     });
   }
 
-  maybeQueue(path, notPriority?: boolean) {
+  maybeQueue(path: NodePath, notPriority?: boolean) {
     if (this.queue) {
       if (notPriority) {
         this.queue.push(path);
@@ -63,7 +82,7 @@ export default class TraversalContext {
     }
   }
 
-  visitMultiple(container, parent, listKey) {
+  visitMultiple(container: t.Node[], parent: t.Node, listKey: string) {
     // nothing to traverse!
     if (container.length === 0) return false;
 
@@ -80,25 +99,33 @@ export default class TraversalContext {
     return this.visitQueue(queue);
   }
 
-  visitSingle(node, key): boolean {
-    if (this.shouldVisit(node[key])) {
+  visitSingle(node: t.Node, key: string): boolean {
+    if (
+      this.shouldVisit(
+        // @ts-expect-error key may not index node
+        node[key],
+      )
+    ) {
       return this.visitQueue([this.create(node, node, key)]);
     } else {
       return false;
     }
   }
 
-  visitQueue(queue: Array<NodePath>) {
+  visitQueue(queue: Array<NodePath>): boolean {
     // set queue
     this.queue = queue;
     this.priorityQueue = [];
 
     const visited = new WeakSet();
     let stop = false;
+    let visitIndex = 0;
 
     // visit the queue
-    for (const path of queue) {
-      path.resync();
+    for (; visitIndex < queue.length; ) {
+      const path = queue[visitIndex];
+      visitIndex++;
+      resync.call(path);
 
       if (
         path.contexts.length === 0 ||
@@ -107,7 +134,7 @@ export default class TraversalContext {
         // The context might already have been pushed when this path was inserted and queued.
         // If we always re-pushed here, we could get duplicates and risk leaving contexts
         // on the stack after the traversal has completed, which could break things.
-        path.pushContext(this);
+        pushContext.call(path, this);
       }
 
       // this path no longer belongs to the tree
@@ -131,9 +158,9 @@ export default class TraversalContext {
       }
     }
 
-    // clear queue
-    for (const path of queue) {
-      path.popContext();
+    // pop contexts
+    for (let i = 0; i < visitIndex; i++) {
+      popContext.call(queue[i]);
     }
 
     // clear queue
@@ -142,8 +169,9 @@ export default class TraversalContext {
     return stop;
   }
 
-  visit(node, key) {
-    const nodes = node[key];
+  visit(node: t.Node, key: string) {
+    // @ts-expect-error key may not index node
+    const nodes = node[key] as t.Node | t.Node[] | null;
     if (!nodes) return false;
 
     if (Array.isArray(nodes)) {

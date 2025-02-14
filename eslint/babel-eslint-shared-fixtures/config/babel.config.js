@@ -8,10 +8,10 @@ module.exports = {
   ],
   plugins: [
     "@babel/plugin-syntax-export-default-from",
-    "@babel/plugin-proposal-class-properties",
-    ["@babel/plugin-proposal-decorators", { decoratorsBeforeExport: false }],
-    ["@babel/plugin-proposal-pipeline-operator", { proposal: "minimal" }],
-    "@babel/plugin-proposal-private-methods",
+    "@babel/plugin-transform-class-properties",
+    ["@babel/plugin-proposal-decorators", { version: "2023-05" }],
+    "@babel/plugin-transform-private-methods",
     "@babel/plugin-proposal-do-expressions",
+    "@babel/plugin-proposal-explicit-resource-management",
   ],
 };

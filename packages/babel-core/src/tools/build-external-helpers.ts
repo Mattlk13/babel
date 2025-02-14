@@ -23,11 +23,11 @@ import {
   variableDeclarator,
 } from "@babel/types";
 import type * as t from "@babel/types";
-import File from "../transformation/file/file";
+import type { Replacements } from "@babel/template";
 
 // Wrapped to avoid wasting time parsing this when almost no-one uses
 // build-external-helpers.
-const buildUmdWrapper = replacements =>
+const buildUmdWrapper = (replacements: Replacements) =>
   template.statement`
     (function (root, factory) {
       if (typeof define === "function" && define.amd) {
@@ -147,6 +147,17 @@ function buildVar(allowlist?: Array<string>) {
 
 function buildHelpers(
   body: t.Statement[],
+  namespace: t.Expression,
+  allowlist?: Array<string>,
+): Record<string, t.MemberExpression>;
+function buildHelpers(
+  body: t.Statement[],
+  namespace: null,
+  allowlist?: Array<string>,
+): Record<string, t.Identifier>;
+
+function buildHelpers(
+  body: t.Statement[],
   namespace: t.Expression | null,
   allowlist?: Array<string>,
 ) {
@@ -156,14 +167,30 @@ function buildHelpers(
       : identifier(`_${name}`);
   };
 
-  const refs = {};
+  const refs: { [key: string]: t.Identifier | t.MemberExpression } = {};
   helpers.list.forEach(function (name) {
-    if (allowlist && allowlist.indexOf(name) < 0) return;
+    if (allowlist && !allowlist.includes(name)) return;
 
     const ref = (refs[name] = getHelperReference(name));
 
-    helpers.ensure(name, File);
-    const { nodes } = helpers.get(name, getHelperReference, ref);
+    const { nodes } = helpers.get(
+      name,
+      getHelperReference,
+      namespace ? null : `_${name}`,
+      [],
+      namespace
+        ? (ast, exportName, mapExportBindingAssignments) => {
+            mapExportBindingAssignments(node =>
+              assignmentExpression("=", ref, node),
+            );
+            ast.body.push(
+              expressionStatement(
+                assignmentExpression("=", ref, identifier(exportName)),
+              ),
+            );
+          }
+        : null,
+    );
 
     body.push(...nodes);
   });

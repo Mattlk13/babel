@@ -1,11 +1,10 @@
 import semver from "semver";
 import { OptionValidator } from "@babel/helper-validator-option";
-import { unreleasedLabels } from "./targets";
-import type { Target, Targets } from "./types";
+import { unreleasedLabels } from "./targets.ts";
+import type { Target, Targets } from "./types.ts";
 
-declare const PACKAGE_JSON: { name: string; version: string };
-
-const versionRegExp = /^(\d+|\d+.\d+)$/;
+const versionRegExp =
+  /^(?:\d+|\d(?:\d?[^\d\n\r\u2028\u2029]\d+|\d{2,}(?:[^\d\n\r\u2028\u2029]\d+)?))$/;
 
 const v = new OptionValidator(PACKAGE_JSON.name);
 
@@ -29,29 +28,39 @@ export function semverify(version: number | string): string {
     `'${version}' is not a valid version`,
   );
 
-  const split = version.toString().split(".");
-  while (split.length < 3) {
-    split.push("0");
+  version = version.toString();
+
+  let pos = 0;
+  let num = 0;
+  while ((pos = version.indexOf(".", pos + 1)) > 0) {
+    num++;
   }
-  return split.join(".");
+  return version + ".0".repeat(2 - num);
 }
 
 export function isUnreleasedVersion(
   version: string | number,
-  env: string,
+  env: Target,
 ): boolean {
-  const unreleasedLabel = unreleasedLabels[env];
+  const unreleasedLabel =
+    // @ts-expect-error unreleasedLabel will be guarded later
+    unreleasedLabels[env];
   return (
     !!unreleasedLabel && unreleasedLabel === version.toString().toLowerCase()
   );
 }
 
-export function getLowestUnreleased(a: string, b: string, env: string): string {
-  const unreleasedLabel = unreleasedLabels[env];
-  const hasUnreleased = [a, b].some(item => item === unreleasedLabel);
-  if (hasUnreleased) {
-    // @ts-expect-error todo(flow->ts): probably a bug - types of a hasUnreleased to not overlap
-    return a === hasUnreleased ? b : a || b;
+export function getLowestUnreleased(a: string, b: string, env: Target): string {
+  const unreleasedLabel:
+    | (typeof unreleasedLabels)[keyof typeof unreleasedLabels]
+    | undefined =
+    // @ts-expect-error unreleasedLabel is undefined when env is not safari
+    unreleasedLabels[env];
+  if (a === unreleasedLabel) {
+    return b;
+  }
+  if (b === unreleasedLabel) {
+    return a;
   }
   return semverMin(a, b);
 }
@@ -59,7 +68,7 @@ export function getLowestUnreleased(a: string, b: string, env: string): string {
 export function getHighestUnreleased(
   a: string,
   b: string,
-  env: string,
+  env: Target,
 ): string {
   return getLowestUnreleased(a, b, env) === a ? b : a;
 }

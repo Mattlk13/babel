@@ -1,111 +1,112 @@
-import type { HubInterface, NodePath, Scope } from "@babel/traverse";
-import traverse from "@babel/traverse";
+import type { File, NodePath, Scope } from "@babel/core";
 import memberExpressionToFunctions from "@babel/helper-member-expression-to-functions";
+import type { HandlerState } from "@babel/helper-member-expression-to-functions";
 import optimiseCall from "@babel/helper-optimise-call-expression";
-import {
-  VISITOR_KEYS,
+import { template, types as t } from "@babel/core";
+import { visitors } from "@babel/traverse";
+const {
   assignmentExpression,
-  booleanLiteral,
   callExpression,
   cloneNode,
   identifier,
   memberExpression,
   sequenceExpression,
-  staticBlock,
   stringLiteral,
   thisExpression,
-} from "@babel/types";
-import type * as t from "@babel/types";
+} = t;
 
-/**
- * Creates an expression which result is the proto of objectRef.
- *
- * @example <caption>isStatic === true</caption>
- *
- *   helpers.getPrototypeOf(CLASS)
- *
- * @example <caption>isStatic === false</caption>
- *
- *   helpers.getPrototypeOf(CLASS.prototype)
- */
-function getPrototypeOfExpression(objectRef, isStatic, file, isPrivateMethod) {
-  objectRef = cloneNode(objectRef);
-  const targetRef =
-    isStatic || isPrivateMethod
-      ? objectRef
-      : memberExpression(objectRef, identifier("prototype"));
-
-  return callExpression(file.addHelper("getPrototypeOf"), [targetRef]);
-}
-
-export function skipAllButComputedKey(
-  path: NodePath<t.Method | t.ClassProperty | t.ClassPrivateProperty>,
-) {
-  // If the path isn't computed, just skip everything.
-  // @ts-expect-error todo(flow->ts) check node type before cheking the property
-  if (!path.node.computed) {
-    path.skip();
-    return;
-  }
-
-  // So it's got a computed key. Make sure to skip every other key the
-  // traversal would visit.
-  const keys = VISITOR_KEYS[path.type];
-  for (const key of keys) {
-    if (key !== "key") path.skipKey(key);
-  }
-}
-
-// environmentVisitor should be used when traversing the whole class and not for specific class elements/methods.
-// For perf reasons, the environmentVisitor will be traversed with `{ noScope: true }`, which means `path.scope` is undefined.
-// Avoid using `path.scope` here
-export const environmentVisitor = {
-  // todo (Babel 8): remove StaticBlock brand checks
-  [`${staticBlock ? "StaticBlock|" : ""}ClassPrivateProperty|TypeAnnotation`](
-    path: NodePath,
+if (!process.env.BABEL_8_BREAKING && !USE_ESM && !IS_STANDALONE) {
+  // eslint-disable-next-line no-restricted-globals
+  exports.environmentVisitor = visitors.environmentVisitor({});
+  // eslint-disable-next-line no-restricted-globals
+  exports.skipAllButComputedKey = function skipAllButComputedKey(
+    path: NodePath<t.Method | t.ClassProperty>,
   ) {
     path.skip();
-  },
+    if (path.node.computed) {
+      path.context.maybeQueue(path.get("key"));
+    }
+  };
+}
 
-  Function(path: NodePath) {
-    // Methods will be handled by the Method visit
-    if (path.isMethod()) return;
-    // Arrow functions inherit their parent's environment
-    if (path.isArrowFunctionExpression()) return;
-    path.skip();
+const visitor = visitors.environmentVisitor<
+  HandlerState<ReplaceState> & ReplaceState
+>({
+  Super(path, state) {
+    const { node, parentPath } = path;
+    if (!parentPath.isMemberExpression({ object: node })) return;
+    state.handle(parentPath);
   },
+});
 
-  "Method|ClassProperty"(path: NodePath<t.Method | t.ClassProperty>) {
-    skipAllButComputedKey(path);
+const unshadowSuperBindingVisitor = visitors.environmentVisitor<{
+  refName: string;
+}>({
+  Scopable(path, { refName }) {
+    // https://github.com/Zzzen/babel/pull/1#pullrequestreview-564833183
+    const binding = path.scope.getOwnBinding(refName);
+    if (binding && binding.identifier.name === refName) {
+      path.scope.rename(refName);
+    }
   },
+});
+
+type SharedState = {
+  file: File;
+  scope: Scope;
+  isDerivedConstructor: boolean;
+  isStatic: boolean;
+  isPrivateMethod: boolean;
+  getObjectRef: () => t.Identifier;
+  getSuperRef: () => t.Identifier;
+  // we dont need boundGet here, but memberExpressionToFunctions handler needs it.
+  boundGet: HandlerState["get"];
 };
 
-const visitor = traverse.visitors.merge([
-  environmentVisitor,
-  {
-    Super(path, state) {
-      const { node, parentPath } = path;
-      if (!parentPath.isMemberExpression({ object: node })) return;
-      state.handle(parentPath);
-    },
-  },
-]);
+type Handler = HandlerState<SharedState> & SharedState;
+type SuperMember = NodePath<
+  t.MemberExpression & {
+    object: t.Super;
+    property: Exclude<t.MemberExpression["property"], t.PrivateName>;
+  }
+>;
 
-const unshadowSuperBindingVisitor = traverse.visitors.merge([
-  environmentVisitor,
-  {
-    Scopable(path, { refName }) {
-      // https://github.com/Zzzen/babel/pull/1#pullrequestreview-564833183
-      const binding = path.scope.getOwnBinding(refName);
-      if (binding && binding.identifier.name === refName) {
-        path.scope.rename(refName);
-      }
-    },
-  },
-]);
+const enum Flags {
+  Prototype = 0b1,
+  Call = 0b10,
+}
 
-const specHandlers = {
-  memoise(superMember, count) {
+interface SpecHandler
+  extends Pick<
+    Handler,
+    | "memoise"
+    | "get"
+    | "set"
+    | "destructureSet"
+    | "call"
+    | "optionalCall"
+    | "delete"
+  > {
+  _get?(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+  ): t.CallExpression;
+  _call?(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    args: t.CallExpression["arguments"],
+    optional: boolean,
+  ): t.CallExpression | t.OptionalCallExpression;
+  _getPrototypeOfExpression(this: Handler & SpecHandler): t.CallExpression;
+  prop(this: Handler & SpecHandler, superMember: SuperMember): t.Expression;
+}
+
+const specHandlers: SpecHandler = {
+  memoise(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    count: number,
+  ) {
     const { scope, node } = superMember;
     const { computed, property } = node;
     if (!computed) {
@@ -120,7 +121,7 @@ const specHandlers = {
     this.memoiser.set(property, memo, count);
   },
 
-  prop(superMember) {
+  prop(this: Handler & SpecHandler, superMember: SuperMember) {
     const { computed, property } = superMember.node;
     if (this.memoiser.has(property)) {
       return cloneNode(this.memoiser.get(property));
@@ -130,86 +131,275 @@ const specHandlers = {
       return cloneNode(property);
     }
 
-    return stringLiteral(property.name);
+    return stringLiteral((property as t.Identifier).name);
   },
 
-  get(superMember) {
-    return this._get(superMember, this._getThisRefs());
+  /**
+   * Creates an expression which result is the proto of objectRef.
+   *
+   * @example <caption>isStatic === true</caption>
+   *
+   *   helpers.getPrototypeOf(CLASS)
+   *
+   * @example <caption>isStatic === false</caption>
+   *
+   *   helpers.getPrototypeOf(CLASS.prototype)
+   */
+  _getPrototypeOfExpression(this: Handler & SpecHandler) {
+    const objectRef = cloneNode(this.getObjectRef());
+    const targetRef =
+      this.isStatic || this.isPrivateMethod
+        ? objectRef
+        : memberExpression(objectRef, identifier("prototype"));
+
+    return callExpression(this.file.addHelper("getPrototypeOf"), [targetRef]);
   },
 
-  _get(superMember, thisRefs) {
-    const proto = getPrototypeOfExpression(
-      this.getObjectRef(),
-      this.isStatic,
-      this.file,
-      this.isPrivateMethod,
-    );
-    return callExpression(this.file.addHelper("get"), [
-      thisRefs.memo ? sequenceExpression([thisRefs.memo, proto]) : proto,
+  get(this: Handler & SpecHandler, superMember: SuperMember) {
+    const objectRef = cloneNode(this.getObjectRef());
+    return callExpression(this.file.addHelper("superPropGet"), [
+      this.isDerivedConstructor
+        ? sequenceExpression([thisExpression(), objectRef])
+        : objectRef,
       this.prop(superMember),
-      thisRefs.this,
+      thisExpression(),
+      ...(this.isStatic || this.isPrivateMethod
+        ? []
+        : [t.numericLiteral(Flags.Prototype)]),
     ]);
   },
 
-  _getThisRefs() {
-    if (!this.isDerivedConstructor) {
-      return { this: thisExpression() };
+  _call(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    args: t.CallExpression["arguments"],
+    optional: boolean,
+  ): t.CallExpression | t.OptionalCallExpression {
+    const objectRef = cloneNode(this.getObjectRef());
+    let argsNode: t.ArrayExpression | t.Identifier;
+    if (
+      args.length === 1 &&
+      t.isSpreadElement(args[0]) &&
+      (t.isIdentifier(args[0].argument) ||
+        t.isArrayExpression(args[0].argument))
+    ) {
+      argsNode = args[0].argument;
+    } else {
+      argsNode = t.arrayExpression(args as t.Expression[]);
     }
-    const thisRef = this.scope.generateDeclaredUidIdentifier("thisSuper");
-    return {
-      memo: assignmentExpression("=", thisRef, thisExpression()),
-      this: cloneNode(thisRef),
-    };
+
+    const call = t.callExpression(this.file.addHelper("superPropGet"), [
+      this.isDerivedConstructor
+        ? sequenceExpression([thisExpression(), objectRef])
+        : objectRef,
+      this.prop(superMember),
+      thisExpression(),
+      t.numericLiteral(
+        Flags.Call |
+          (this.isStatic || this.isPrivateMethod ? 0 : Flags.Prototype),
+      ),
+    ]);
+    if (optional) {
+      return t.optionalCallExpression(call, [argsNode], true);
+    }
+    return callExpression(call, [argsNode]);
   },
 
-  set(superMember, value) {
-    const thisRefs = this._getThisRefs();
-    const proto = getPrototypeOfExpression(
-      this.getObjectRef(),
-      this.isStatic,
-      this.file,
-      this.isPrivateMethod,
-    );
-    return callExpression(this.file.addHelper("set"), [
-      thisRefs.memo ? sequenceExpression([thisRefs.memo, proto]) : proto,
+  set(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    value: t.Expression,
+  ) {
+    const objectRef = cloneNode(this.getObjectRef());
+
+    return callExpression(this.file.addHelper("superPropSet"), [
+      this.isDerivedConstructor
+        ? sequenceExpression([thisExpression(), objectRef])
+        : objectRef,
       this.prop(superMember),
       value,
-      thisRefs.this,
-      booleanLiteral(superMember.isInStrictMode()),
+      thisExpression(),
+      t.numericLiteral(superMember.isInStrictMode() ? 1 : 0),
+      ...(this.isStatic || this.isPrivateMethod ? [] : [t.numericLiteral(1)]),
     ]);
   },
 
-  destructureSet(superMember) {
+  destructureSet(this: Handler & SpecHandler, superMember: SuperMember) {
     throw superMember.buildCodeFrameError(
       `Destructuring to a super field is not supported yet.`,
     );
   },
 
-  call(superMember, args) {
-    const thisRefs = this._getThisRefs();
-    return optimiseCall(
-      this._get(superMember, thisRefs),
-      cloneNode(thisRefs.this),
-      args,
-      false,
+  call(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    args: t.CallExpression["arguments"],
+  ) {
+    return this._call(superMember, args, false);
+  },
+
+  optionalCall(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    args: t.CallExpression["arguments"],
+  ) {
+    return this._call(superMember, args, true);
+  },
+
+  delete(this: Handler & SpecHandler, superMember: SuperMember) {
+    if (superMember.node.computed) {
+      return sequenceExpression([
+        callExpression(this.file.addHelper("toPropertyKey"), [
+          cloneNode(superMember.node.property),
+        ]),
+        template.expression.ast`
+          function () { throw new ReferenceError("'delete super[expr]' is invalid"); }()
+        `,
+      ]);
+    } else {
+      return template.expression.ast`
+        function () { throw new ReferenceError("'delete super.prop' is invalid"); }()
+      `;
+    }
+  },
+};
+
+const specHandlers_old: SpecHandler = {
+  memoise(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    count: number,
+  ) {
+    const { scope, node } = superMember;
+    const { computed, property } = node;
+    if (!computed) {
+      return;
+    }
+
+    const memo = scope.maybeGenerateMemoised(property);
+    if (!memo) {
+      return;
+    }
+
+    this.memoiser.set(property, memo, count);
+  },
+
+  prop(this: Handler & SpecHandler, superMember: SuperMember) {
+    const { computed, property } = superMember.node;
+    if (this.memoiser.has(property)) {
+      return cloneNode(this.memoiser.get(property));
+    }
+
+    if (computed) {
+      return cloneNode(property);
+    }
+
+    return stringLiteral((property as t.Identifier).name);
+  },
+
+  /**
+   * Creates an expression which result is the proto of objectRef.
+   *
+   * @example <caption>isStatic === true</caption>
+   *
+   *   helpers.getPrototypeOf(CLASS)
+   *
+   * @example <caption>isStatic === false</caption>
+   *
+   *   helpers.getPrototypeOf(CLASS.prototype)
+   */
+  _getPrototypeOfExpression(this: Handler & SpecHandler) {
+    const objectRef = cloneNode(this.getObjectRef());
+    const targetRef =
+      this.isStatic || this.isPrivateMethod
+        ? objectRef
+        : memberExpression(objectRef, identifier("prototype"));
+
+    return callExpression(this.file.addHelper("getPrototypeOf"), [targetRef]);
+  },
+
+  get(this: Handler & SpecHandler, superMember: SuperMember) {
+    return this._get(superMember);
+  },
+
+  _get(this: Handler & SpecHandler, superMember: SuperMember) {
+    const proto = this._getPrototypeOfExpression();
+    return callExpression(this.file.addHelper("get"), [
+      this.isDerivedConstructor
+        ? sequenceExpression([thisExpression(), proto])
+        : proto,
+      this.prop(superMember),
+      thisExpression(),
+    ]);
+  },
+
+  set(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    value: t.Expression,
+  ) {
+    const proto = this._getPrototypeOfExpression();
+
+    return callExpression(this.file.addHelper("set"), [
+      this.isDerivedConstructor
+        ? sequenceExpression([thisExpression(), proto])
+        : proto,
+      this.prop(superMember),
+      value,
+      thisExpression(),
+      t.booleanLiteral(superMember.isInStrictMode()),
+    ]);
+  },
+
+  destructureSet(this: Handler & SpecHandler, superMember: SuperMember) {
+    throw superMember.buildCodeFrameError(
+      `Destructuring to a super field is not supported yet.`,
     );
   },
 
-  optionalCall(superMember, args) {
-    const thisRefs = this._getThisRefs();
+  call(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    args: t.CallExpression["arguments"],
+  ) {
+    return optimiseCall(this._get(superMember), thisExpression(), args, false);
+  },
+
+  optionalCall(
+    this: Handler & SpecHandler,
+    superMember: SuperMember,
+    args: t.CallExpression["arguments"],
+  ) {
     return optimiseCall(
-      this._get(superMember, thisRefs),
-      cloneNode(thisRefs.this),
+      this._get(superMember),
+      cloneNode(thisExpression()),
       args,
       true,
     );
+  },
+
+  delete(this: Handler & SpecHandler, superMember: SuperMember) {
+    if (superMember.node.computed) {
+      return sequenceExpression([
+        callExpression(this.file.addHelper("toPropertyKey"), [
+          cloneNode(superMember.node.property),
+        ]),
+        template.expression.ast`
+          function () { throw new ReferenceError("'delete super[expr]' is invalid"); }()
+        `,
+      ]);
+    } else {
+      return template.expression.ast`
+        function () { throw new ReferenceError("'delete super.prop' is invalid"); }()
+      `;
+    }
   },
 };
 
 const looseHandlers = {
   ...specHandlers,
 
-  prop(superMember) {
+  prop(this: Handler & typeof specHandlers, superMember: SuperMember) {
     const { property } = superMember.node;
     if (this.memoiser.has(property)) {
       return cloneNode(this.memoiser.get(property));
@@ -218,7 +408,7 @@ const looseHandlers = {
     return cloneNode(property);
   },
 
-  get(superMember) {
+  get(this: Handler & typeof specHandlers, superMember: SuperMember) {
     const { isStatic, getSuperRef } = this;
     const { computed } = superMember.node;
     const prop = this.prop(superMember);
@@ -238,7 +428,11 @@ const looseHandlers = {
     return memberExpression(object, prop, computed);
   },
 
-  set(superMember, value) {
+  set(
+    this: Handler & typeof specHandlers,
+    superMember: SuperMember,
+    value: t.Expression,
+  ) {
     const { computed } = superMember.node;
     const prop = this.prop(superMember);
 
@@ -249,26 +443,44 @@ const looseHandlers = {
     );
   },
 
-  destructureSet(superMember) {
+  destructureSet(
+    this: Handler & typeof specHandlers,
+    superMember: SuperMember,
+  ) {
     const { computed } = superMember.node;
     const prop = this.prop(superMember);
 
     return memberExpression(thisExpression(), prop, computed);
   },
 
-  call(superMember, args) {
+  call(
+    this: Handler & typeof specHandlers,
+    superMember: SuperMember,
+    args: t.CallExpression["arguments"],
+  ) {
     return optimiseCall(this.get(superMember), thisExpression(), args, false);
   },
 
-  optionalCall(superMember, args) {
+  optionalCall(
+    this: Handler & typeof specHandlers,
+    superMember: SuperMember,
+    args: t.CallExpression["arguments"],
+  ) {
     return optimiseCall(this.get(superMember), thisExpression(), args, true);
   },
 };
 
 type ReplaceSupersOptionsBase = {
-  methodPath: NodePath<any>;
+  methodPath: NodePath<
+    | t.ClassMethod
+    | t.ClassProperty
+    | t.ObjectMethod
+    | t.ClassPrivateMethod
+    | t.ClassPrivateProperty
+    | t.StaticBlock
+  >;
   constantSuper?: boolean;
-  file: any;
+  file: File;
   // objectRef might have been shadowed in child scopes,
   // in that case, we need to rename related variables.
   refToPreserve?: t.Identifier;
@@ -285,7 +497,7 @@ type ReplaceSupersOptions = ReplaceSupersOptionsBase &
   );
 
 interface ReplaceState {
-  file: unknown;
+  file: File;
   scope: Scope;
   isDerivedConstructor: boolean;
   isStatic: boolean;
@@ -302,18 +514,21 @@ export default class ReplaceSupers {
     this.isDerivedConstructor =
       path.isClassMethod({ kind: "constructor" }) && !!opts.superRef;
     this.isStatic =
-      path.isObjectMethod() || path.node.static || path.isStaticBlock?.();
+      path.isObjectMethod() ||
+      // @ts-expect-error static is not in ClassPrivateMethod
+      path.node.static ||
+      path.isStaticBlock?.();
     this.isPrivateMethod = path.isPrivate() && path.isMethod();
 
     this.file = opts.file;
     this.constantSuper = process.env.BABEL_8_BREAKING
       ? opts.constantSuper
       : // Fallback to isLoose for backward compatibility
-        opts.constantSuper ?? (opts as any).isLoose;
+        (opts.constantSuper ?? (opts as any).isLoose);
     this.opts = opts;
   }
 
-  declare file: HubInterface;
+  declare file: File;
   declare isDerivedConstructor: boolean;
   declare constantSuper: boolean;
   declare isPrivateMethod: boolean;
@@ -327,20 +542,40 @@ export default class ReplaceSupers {
 
   getSuperRef() {
     if (this.opts.superRef) return cloneNode(this.opts.superRef);
-    if (this.opts.getSuperRef) return cloneNode(this.opts.getSuperRef());
+    if (this.opts.getSuperRef) {
+      return cloneNode(this.opts.getSuperRef());
+    }
   }
 
   replace() {
+    const { methodPath } = this;
     // https://github.com/babel/babel/issues/11994
     if (this.opts.refToPreserve) {
-      this.methodPath.traverse(unshadowSuperBindingVisitor, {
+      methodPath.traverse(unshadowSuperBindingVisitor, {
         refName: this.opts.refToPreserve.name,
       });
     }
 
-    const handler = this.constantSuper ? looseHandlers : specHandlers;
+    const handler = this.constantSuper
+      ? looseHandlers
+      : process.env.BABEL_8_BREAKING ||
+          this.file.availableHelper("superPropSet")
+        ? specHandlers
+        : specHandlers_old;
 
-    memberExpressionToFunctions<ReplaceState>(this.methodPath, visitor, {
+    // todo: this should have been handled by the environmentVisitor,
+    // consider add visitSelf support for the path.traverse
+    // @ts-expect-error: Refine typings in packages/babel-traverse/src/types.ts
+    // shouldSkip is accepted in traverseNode
+    visitor.shouldSkip = (path: NodePath) => {
+      if (path.parentPath === methodPath) {
+        if (path.parentKey === "decorators" || path.parentKey === "key") {
+          return true;
+        }
+      }
+    };
+
+    memberExpressionToFunctions<ReplaceState>(methodPath, visitor, {
       file: this.file,
       scope: this.methodPath.scope,
       isDerivedConstructor: this.isDerivedConstructor,

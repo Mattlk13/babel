@@ -1,11 +1,11 @@
-import type NodePath from "../path";
+import type NodePath from "../path/index.ts";
 import type * as t from "@babel/types";
-import type Scope from "./index";
+import type Scope from "./index.ts";
 
-type BindingKind =
+export type BindingKind =
   | "var" /* var declarator */
   | "let" /* let declarator, class declaration id, catch clause parameters */
-  | "const" /* const declarator */
+  | "const" /* const/using declarator */
   | "module" /* import specifiers */
   | "hoisted" /* function declaration id */
   | "param" /* function declaration parameters */
@@ -44,6 +44,10 @@ export default class Binding {
     this.path = path;
     this.kind = kind;
 
+    if ((kind === "var" || kind === "hoisted") && isDeclaredInLoop(path)) {
+      this.reassign(path);
+    }
+
     this.clearValue();
   }
 
@@ -79,9 +83,9 @@ export default class Binding {
    * Register a constant violation with the provided `path`.
    */
 
-  reassign(path: any) {
+  reassign(path: NodePath) {
     this.constant = false;
-    if (this.constantViolations.indexOf(path) !== -1) {
+    if (this.constantViolations.includes(path)) {
       return;
     }
     this.constantViolations.push(path);
@@ -92,7 +96,7 @@ export default class Binding {
    */
 
   reference(path: NodePath) {
-    if (this.referencePaths.indexOf(path) !== -1) {
+    if (this.referencePaths.includes(path)) {
       return;
     }
     this.referenced = true;
@@ -108,4 +112,22 @@ export default class Binding {
     this.references--;
     this.referenced = !!this.references;
   }
+}
+
+function isDeclaredInLoop(path: NodePath) {
+  for (
+    let { parentPath, key } = path;
+    parentPath;
+    { parentPath, key } = parentPath
+  ) {
+    if (parentPath.isFunctionParent()) return false;
+    if (
+      parentPath.isWhile() ||
+      parentPath.isForXStatement() ||
+      (parentPath.isForStatement() && key === "body")
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

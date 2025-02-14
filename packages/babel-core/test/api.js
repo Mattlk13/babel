@@ -1,15 +1,19 @@
-import * as babel from "../lib/index";
-import sourceMap from "source-map";
+import * as babel from "../lib/index.js";
+import { TraceMap, originalPositionFor } from "@jridgewell/trace-mapping";
 import path from "path";
-import Plugin from "../lib/config/plugin";
 import generator from "@babel/generator";
-import { fileURLToPath } from "url";
 
-import presetEnv from "../../babel-preset-env";
-import pluginSyntaxFlow from "../../babel-plugin-syntax-flow";
-import pluginFlowStripTypes from "../../babel-plugin-transform-flow-strip-types";
+import _Plugin from "../lib/config/plugin.js";
+const Plugin = _Plugin.default || _Plugin;
 
-const cwd = path.dirname(fileURLToPath(import.meta.url));
+import presetEnv from "@babel/preset-env";
+import pluginSyntaxFlow from "@babel/plugin-syntax-flow";
+import pluginSyntaxJSX from "@babel/plugin-syntax-jsx";
+import pluginFlowStripTypes from "@babel/plugin-transform-flow-strip-types";
+import { itBabel8, commonJS, IS_BABEL_8, USE_ESM } from "$repo-utils";
+
+const { __dirname, require } = commonJS(import.meta.url);
+const cwd = __dirname;
 
 function assertIgnored(result) {
   expect(result).toBeNull();
@@ -23,8 +27,16 @@ function parse(code, opts) {
   return babel.parse(code, { cwd, configFile: false, ...opts });
 }
 
+function parseSync(code, opts) {
+  return babel.parseSync(code, { cwd, configFile: false, ...opts });
+}
+
 function transform(code, opts) {
   return babel.transform(code, { cwd, configFile: false, ...opts });
+}
+
+function transformSync(code, opts) {
+  return babel.transformSync(code, { cwd, configFile: false, ...opts });
 }
 
 function transformFile(filename, opts, cb) {
@@ -49,18 +61,26 @@ function transformFromAst(ast, code, opts) {
   return babel.transformFromAst(ast, code, { cwd, configFile: false, ...opts });
 }
 
+function transformFromAstSync(ast, code, opts) {
+  return babel.transformFromAstSync(ast, code, {
+    cwd,
+    configFile: false,
+    ...opts,
+  });
+}
+
 describe("parser and generator options", function () {
   const recast = {
     parse: function (code, opts) {
       return opts.parser.parse(code);
     },
     print: function (ast) {
-      return generator(ast);
+      return (generator.default || generator)(ast);
     },
   };
 
   function newTransform(string) {
-    return transform(string, {
+    return transformSync(string, {
       ast: true,
       parserOpts: {
         parser: recast.parse,
@@ -76,7 +96,7 @@ describe("parser and generator options", function () {
   it("options", function () {
     const string = "original;";
     expect(newTransform(string).ast).toEqual(
-      transform(string, { ast: true }).ast,
+      transformSync(string, { ast: true }).ast,
     );
     expect(newTransform(string).code).toBe(string);
   });
@@ -85,7 +105,7 @@ describe("parser and generator options", function () {
     const experimental = "var a: number = 1;";
 
     expect(newTransform(experimental).ast).toEqual(
-      transform(experimental, {
+      transformSync(experimental, {
         ast: true,
         parserOpts: {
           plugins: ["flow"],
@@ -95,9 +115,9 @@ describe("parser and generator options", function () {
     expect(newTransform(experimental).code).toBe(experimental);
 
     function newTransformWithPlugins(string) {
-      return transform(string, {
+      return transformSync(string, {
         ast: true,
-        plugins: [cwd + "/../../babel-plugin-syntax-flow"],
+        plugins: [pluginSyntaxFlow],
         parserOpts: {
           parser: recast.parse,
         },
@@ -108,7 +128,7 @@ describe("parser and generator options", function () {
     }
 
     expect(newTransformWithPlugins(experimental).ast).toEqual(
-      transform(experimental, {
+      transformSync(experimental, {
         ast: true,
         parserOpts: {
           plugins: ["flow"],
@@ -122,7 +142,7 @@ describe("parser and generator options", function () {
     const experimental = "if (true) {\n  import a from 'a';\n}";
 
     expect(newTransform(experimental).ast).not.toBe(
-      transform(experimental, {
+      transformSync(experimental, {
         ast: true,
         parserOpts: {
           allowImportExportEverywhere: true,
@@ -136,13 +156,13 @@ describe("parser and generator options", function () {
 describe("api", function () {
   it("exposes the resolvePlugin method", function () {
     expect(() => babel.resolvePlugin("nonexistent-plugin")).toThrow(
-      /Cannot resolve module 'babel-plugin-nonexistent-plugin'/,
+      /Cannot (?:find|resolve) module 'babel-plugin-nonexistent-plugin'/,
     );
   });
 
   it("exposes the resolvePreset method", function () {
     expect(() => babel.resolvePreset("nonexistent-preset")).toThrow(
-      /Cannot resolve module 'babel-preset-nonexistent-preset'/,
+      /Cannot (?:find|resolve) module 'babel-preset-nonexistent-preset'/,
     );
   });
 
@@ -152,6 +172,21 @@ describe("api", function () {
 
   it("exposes the parser's token types", function () {
     expect(babel.tokTypes).toBeDefined();
+  });
+
+  itBabel8("parse throws on undefined callback", () => {
+    expect(() => parse("", {})).toThrowErrorMatchingInlineSnapshot(
+      `"Starting from Babel 8.0.0, the 'parse' function expects a callback. If you need to call it synchronously, please use 'parseSync'."`,
+    );
+  });
+
+  itBabel8("transform throws on undefined callback", () => {
+    const options = {
+      filename: "example.js",
+    };
+    expect(() => transform("", options)).toThrowErrorMatchingInlineSnapshot(
+      `"Starting from Babel 8.0.0, the 'transform' function expects a callback. If you need to call it synchronously, please use 'transformSync'."`,
+    );
   });
 
   it("transformFile", function () {
@@ -188,6 +223,17 @@ describe("api", function () {
     expect(options).toEqual({ babelrc: false });
   });
 
+  it("transformFile throws on undefined callback", () => {
+    const options = {
+      babelrc: false,
+    };
+    expect(() =>
+      transformFile(cwd + "/fixtures/api/file.js", options),
+    ).toThrowErrorMatchingInlineSnapshot(
+      `"Asynchronous function called without callback"`,
+    );
+  });
+
   it("transformFileSync", function () {
     const options = {
       babelrc: false,
@@ -199,10 +245,68 @@ describe("api", function () {
     expect(options).toEqual({ babelrc: false });
   });
 
+  itBabel8("transformFromAst throws on undefined callback", () => {
+    const program = "const identifier = 1";
+    const node = parseSync(program);
+    expect(() =>
+      transformFromAst(node, program),
+    ).toThrowErrorMatchingInlineSnapshot(
+      `"Starting from Babel 8.0.0, the 'transformFromAst' function expects a callback. If you need to call it synchronously, please use 'transformFromAstSync'."`,
+    );
+  });
+
+  it("transformFromAst should generate same code with different cloneInputAst", function () {
+    const program = `//test1
+    /*test2*/var/*test3*/ a = 1/*test4*/;//test5
+    //test6
+    var b;
+    `;
+    const node = parseSync(program);
+    const { code } = transformFromAstSync(node, program, {
+      plugins: [
+        function () {
+          return {
+            visitor: {
+              Identifier: function (path) {
+                path.node.name = "replaced";
+              },
+            },
+          };
+        },
+      ],
+    });
+    const { code: code2 } = transformFromAstSync(node, program, {
+      cloneInputAst: false,
+      plugins: [
+        function () {
+          return {
+            visitor: {
+              Identifier: function (path) {
+                path.node.name = "replaced";
+              },
+            },
+          };
+        },
+      ],
+    });
+
+    expect(code).toBe(code2);
+  });
+
+  it("transformFromAstSync should not cause infinite recursion with circular objects", () => {
+    const program = "const identifier = 1";
+    const node = parseSync(program);
+    node.program.body[0].extra = { parent: node.program };
+
+    expect(transformFromAstSync(node, program, {}).code).toBe(
+      "const identifier = 1;",
+    );
+  });
+
   it("transformFromAst should not mutate the AST", function () {
     const program = "const identifier = 1";
-    const node = parse(program);
-    const { code } = transformFromAst(node, program, {
+    const node = parseSync(program);
+    const { code } = transformFromAstSync(node, program, {
       plugins: [
         function () {
           return {
@@ -223,10 +327,10 @@ describe("api", function () {
     );
   });
 
-  it("transformFromAst should mutate the AST when cloneInputAst is false", function () {
+  it("transformFromAstSync should mutate the AST when cloneInputAst is false", function () {
     const program = "const identifier = 1";
-    const node = parse(program);
-    const { code } = transformFromAst(node, program, {
+    const node = parseSync(program);
+    const { code } = transformFromAstSync(node, program, {
       cloneInputAst: false,
       plugins: [
         function () {
@@ -250,28 +354,39 @@ describe("api", function () {
 
   it("options throw on falsy true", function () {
     return expect(function () {
-      transform("", {
-        plugins: [cwd + "/../../babel-plugin-syntax-jsx", false],
+      transformSync("", {
+        plugins: [pluginSyntaxJSX, false],
       });
     }).toThrow(/.plugins\[1\] must be a string, object, function/);
   });
 
-  it("options merge backwards", function () {
-    return transformAsync("", {
-      presets: [cwd + "/../../babel-preset-env"],
-      plugins: [cwd + "/../../babel-plugin-syntax-jsx"],
-    }).then(function (result) {
-      expect(result.options.plugins[0].manipulateOptions.toString()).toEqual(
-        expect.stringContaining("jsx"),
-      );
+  it("options merge backwards", async function () {
+    const result = await transformAsync("", {
+      cwd,
+      presets: [
+        () => ({
+          plugins: [() => ({ name: "plugin-4" }), () => ({ name: "plugin-5" })],
+        }),
+        () => ({
+          plugins: [() => ({ name: "plugin-2" }), () => ({ name: "plugin-3" })],
+        }),
+      ],
+      plugins: [() => ({ name: "plugin-0" }), () => ({ name: "plugin-1" })],
     });
+
+    expect(result.options.plugins[0].key).toBe("plugin-0");
+    expect(result.options.plugins[1].key).toBe("plugin-1");
+    expect(result.options.plugins[2].key).toBe("plugin-2");
+    expect(result.options.plugins[3].key).toBe("plugin-3");
+    expect(result.options.plugins[4].key).toBe("plugin-4");
+    expect(result.options.plugins[5].key).toBe("plugin-5");
   });
 
   it("option wrapPluginVisitorMethod", function () {
     let calledRaw = 0;
     let calledIntercept = 0;
 
-    transform("function foo() { bar(foobar); }", {
+    transformSync("function foo() { bar(foobar); }", {
       wrapPluginVisitorMethod: function (pluginAlias, visitorType, callback) {
         if (pluginAlias !== "foobar") {
           return callback;
@@ -305,7 +420,7 @@ describe("api", function () {
     let aliasBaseType = null;
 
     function execTest(passPerPreset) {
-      return transform("type Foo = number; let x = (y): Foo => y;", {
+      return transformSync("type Foo = number; let x = (y): Foo => y;", {
         sourceType: "script",
         passPerPreset: passPerPreset,
         presets: [
@@ -388,7 +503,7 @@ describe("api", function () {
     const oldEnv = process.env.BABEL_ENV;
     process.env.BABEL_ENV = "development";
 
-    const result = transform("", {
+    const result = transformSync("", {
       cwd: path.join(cwd, "fixtures", "config", "complex-plugin-config"),
       filename: path.join(
         cwd,
@@ -446,7 +561,7 @@ describe("api", function () {
 
   it("interpreter directive backward-compat", function () {
     function doTransform(code, preHandler) {
-      return transform(code, {
+      return transformSync(code, {
         plugins: [
           {
             pre: preHandler,
@@ -499,9 +614,8 @@ describe("api", function () {
   });
 
   it("source map merging", function () {
-    const result = transform(
+    const result = transformSync(
       [
-        /* eslint-disable max-len */
         'function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }',
         "",
         "let Foo = function Foo() {",
@@ -509,7 +623,6 @@ describe("api", function () {
         "};",
         "",
         "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInN0ZG91dCJdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiOztJQUFNLEdBQUcsWUFBSCxHQUFHO3dCQUFILEdBQUciLCJmaWxlIjoidW5kZWZpbmVkIiwic291cmNlc0NvbnRlbnQiOlsiY2xhc3MgRm9vIHt9XG4iXX0=",
-        /* eslint-enable max-len */
       ].join("\n"),
       {
         sourceMap: true,
@@ -523,22 +636,21 @@ describe("api", function () {
         '    throw new TypeError("Cannot call a class as a function");',
         "  }",
         "}",
-        "",
         "let Foo = function Foo() {",
         "  _classCallCheck(this, Foo);",
         "};",
       ].join("\n"),
     ).toBe(result.code);
 
-    const consumer = new sourceMap.SourceMapConsumer(result.map);
+    const consumer = new TraceMap(result.map);
 
     expect(
-      consumer.originalPositionFor({
-        line: 7,
+      originalPositionFor(consumer, {
+        line: 6,
         column: 4,
       }),
     ).toEqual({
-      name: null,
+      name: "Foo",
       source: "stdout",
       line: 1,
       column: 6,
@@ -556,19 +668,19 @@ describe("api", function () {
   });
 
   it("code option false", function () {
-    return transformAsync("foo('bar');", { code: false }).then(function (
-      result,
-    ) {
-      expect(result.code).toBeFalsy();
-    });
+    return transformAsync("foo('bar');", { code: false }).then(
+      function (result) {
+        expect(result.code).toBeFalsy();
+      },
+    );
   });
 
   it("ast option false", function () {
-    return transformAsync("foo('bar');", { ast: false }).then(function (
-      result,
-    ) {
-      expect(result.ast).toBeFalsy();
-    });
+    return transformAsync("foo('bar');", { ast: false }).then(
+      function (result) {
+        expect(result.ast).toBeFalsy();
+      },
+    );
   });
 
   it("ast option true", function () {
@@ -608,7 +720,7 @@ describe("api", function () {
       ],
     }).then(function (result) {
       expect(result.code).toBe(
-        "/*before*/\nstart;\n\n/*after*/\nclass Foo {}\n\n/*before*/\nend;\n\n/*after*/",
+        "/*before*/\nstart;\n/*after*/\nclass Foo {}\n/*before*/\nend;\n/*after*/",
       );
     });
   });
@@ -708,7 +820,7 @@ describe("api", function () {
     });
 
     it("default", function () {
-      const result = transform("foo;", {
+      const result = transformSync("foo;", {
         env: {
           development: { comments: false },
         },
@@ -719,7 +831,7 @@ describe("api", function () {
 
     it("BABEL_ENV", function () {
       process.env.BABEL_ENV = "foo";
-      const result = transform("foo;", {
+      const result = transformSync("foo;", {
         env: {
           foo: { comments: false },
         },
@@ -729,7 +841,7 @@ describe("api", function () {
 
     it("NODE_ENV", function () {
       process.env.NODE_ENV = "foo";
-      const result = transform("foo;", {
+      const result = transformSync("foo;", {
         env: {
           foo: { comments: false },
         },
@@ -739,24 +851,6 @@ describe("api", function () {
   });
 
   describe("buildExternalHelpers", function () {
-    describe("smoke tests", function () {
-      it("builds external helpers in global output type", function () {
-        babel.buildExternalHelpers(null, "global");
-      });
-
-      it("builds external helpers in module output type", function () {
-        babel.buildExternalHelpers(null, "module");
-      });
-
-      it("builds external helpers in umd output type", function () {
-        babel.buildExternalHelpers(null, "umd");
-      });
-
-      it("builds external helpers in var output type", function () {
-        babel.buildExternalHelpers(null, "var");
-      });
-    });
-
     it("all", function () {
       const script = babel.buildExternalHelpers();
       expect(script).toEqual(expect.stringContaining("classCallCheck"));
@@ -779,6 +873,88 @@ describe("api", function () {
       const script = babel.buildExternalHelpers(["typeof"]);
       expect(script).toEqual(expect.stringContaining("typeof"));
     });
+
+    describe("output types", function () {
+      it("global", function () {
+        const script = babel.buildExternalHelpers(["get"], "global");
+        expect(script).toMatchInlineSnapshot(`
+          "(function (global) {
+            var babelHelpers = global.babelHelpers = {};
+            function _get() {
+              return babelHelpers.get = _get = \\"undefined\\" != typeof Reflect && Reflect.get ? Reflect.get.bind() : function (e, t, r) {
+                var p = babelHelpers.superPropBase(e, t);
+                if (p) {
+                  var n = Object.getOwnPropertyDescriptor(p, t);
+                  return n.get ? n.get.call(arguments.length < 3 ? e : r) : n.value;
+                }
+              }, _get.apply(null, arguments);
+            }
+            babelHelpers.get = _get;
+          })(typeof global === \\"undefined\\" ? self : global);"
+        `);
+      });
+
+      it("umd", function () {
+        const script = babel.buildExternalHelpers(["get"], "umd");
+        expect(script).toMatchInlineSnapshot(`
+          "(function (root, factory) {
+            if (typeof define === \\"function\\" && define.amd) {
+              define([\\"exports\\"], factory);
+            } else if (typeof exports === \\"object\\") {
+              factory(exports);
+            } else {
+              factory(root.babelHelpers = {});
+            }
+          })(this, function (global) {
+            var babelHelpers = global;
+            function _get() {
+              return babelHelpers.get = _get = \\"undefined\\" != typeof Reflect && Reflect.get ? Reflect.get.bind() : function (e, t, r) {
+                var p = babelHelpers.superPropBase(e, t);
+                if (p) {
+                  var n = Object.getOwnPropertyDescriptor(p, t);
+                  return n.get ? n.get.call(arguments.length < 3 ? e : r) : n.value;
+                }
+              }, _get.apply(null, arguments);
+            }
+            babelHelpers.get = _get;
+          });"
+        `);
+      });
+
+      it("var", function () {
+        const script = babel.buildExternalHelpers(["get"], "var");
+        expect(script).toMatchInlineSnapshot(`
+          "var babelHelpers = {};
+          function _get() {
+            return babelHelpers.get = _get = \\"undefined\\" != typeof Reflect && Reflect.get ? Reflect.get.bind() : function (e, t, r) {
+              var p = babelHelpers.superPropBase(e, t);
+              if (p) {
+                var n = Object.getOwnPropertyDescriptor(p, t);
+                return n.get ? n.get.call(arguments.length < 3 ? e : r) : n.value;
+              }
+            }, _get.apply(null, arguments);
+          }
+          babelHelpers.get = _get;
+          babelHelpers;"
+        `);
+      });
+
+      it("module", function () {
+        const script = babel.buildExternalHelpers(["get"], "module");
+        expect(script).toMatchInlineSnapshot(`
+          "export { _get as get };
+          function _get() {
+            return _get = \\"undefined\\" != typeof Reflect && Reflect.get ? Reflect.get.bind() : function (e, t, r) {
+              var p = _superPropBase(e, t);
+              if (p) {
+                var n = Object.getOwnPropertyDescriptor(p, t);
+                return n.get ? n.get.call(arguments.length < 3 ? e : r) : n.value;
+              }
+            }, _get.apply(null, arguments);
+          }"
+        `);
+      });
+    });
   });
 
   describe("handle parsing errors", function () {
@@ -796,7 +972,7 @@ describe("api", function () {
               "Support for the experimental syntax 'pipelineOperator' isn't currently enabled (1:3):",
             );
             expect(err.message).toMatch(
-              "Add @babel/plugin-proposal-pipeline-operator (https://git.io/vb4SU) to the " +
+              "Add @babel/plugin-proposal-pipeline-operator (https://github.com/babel/babel/tree/main/packages/babel-plugin-proposal-pipeline-operator) to the " +
                 "'plugins' section of your Babel config to enable transformation.",
             );
             resolve();
@@ -805,23 +981,29 @@ describe("api", function () {
       });
     });
 
-    it("both syntax and transform plugin available", function () {
-      return new Promise(resolve => {
+    it("both syntax and transform plugin available", async function () {
+      const promise = new Promise((resolve, reject) => {
         transformFile(
           cwd + "/fixtures/api/parsing-errors/syntax-and-transform/file.js",
           options,
-          function (err) {
-            expect(err.message).toMatch(
-              "Support for the experimental syntax 'doExpressions' isn't currently enabled (1:2):",
-            );
-            expect(err.message).toMatch(
-              "Add @babel/plugin-proposal-do-expressions (https://git.io/vb4S3) to the " +
-                "'plugins' section of your Babel config to enable transformation.",
-            );
-            resolve();
-          },
+          (err, result) => (err ? reject(err) : resolve(result)),
         );
       });
+
+      await expect(promise).rejects.toThrow();
+
+      const err = await promise.catch(e => e);
+
+      expect(err.message).toMatch(
+        "Support for the experimental syntax 'doExpressions' isn't currently enabled (1:2):",
+      );
+      expect(err.message).toMatch(
+        "Add @babel/plugin-proposal-do-expressions (https://github.com/babel/babel/tree/main/packages/babel-plugin-proposal-do-expressions) to the " +
+          "'plugins' section of your Babel config to enable transformation.",
+      );
+      expect(err.message).toMatch(
+        /npx cross-env BABEL_SHOW_CONFIG_FOR=(.*?)[\\/]parsing-errors[\\/]syntax-and-transform[\\/]file.js/,
+      );
     });
   });
 
@@ -845,7 +1027,24 @@ describe("api", function () {
             },
           ],
         }),
-      ).toThrow();
+      ).toThrowErrorMatchingInlineSnapshot(
+        `"unknown file: Unknown helper fooBar"`,
+      );
     });
   });
 });
+
+if (IS_BABEL_8() && USE_ESM) {
+  describe("cjs-proxy", function () {
+    it("error should be caught", () => {
+      let err;
+      try {
+        const cjs = require("../cjs-proxy.cjs");
+        cjs.parse("foo");
+      } catch (error) {
+        err = error;
+      }
+      expect(err).toBeInstanceOf(Error);
+    });
+  });
+}

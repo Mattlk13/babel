@@ -1,42 +1,35 @@
-import t from "@babel/types";
-import virtualTypes from "../../lib/path/lib/virtual-types.js";
-import definitions from "@babel/types/lib/definitions/index.js";
+import * as t from "@babel/types";
 
 export default function generateValidators() {
   let output = `/*
  * This file is auto-generated! Do not modify it directly.
  * To re-generate run 'make build'
  */
-import * as t from "@babel/types";
-import NodePath from "../index";
-import type { VirtualTypeAliases } from "./virtual-types";
+import type * as t from "@babel/types";
+import type NodePath from "../index";
+import type { VirtualTypeNodePathValidators } from "../lib/virtual-types-validator";
 
-export interface NodePathValidators {
+type Opts<Obj> = Partial<{
+  [Prop in keyof Obj]: Obj[Prop] extends t.Node
+    ? t.Node
+    : Obj[Prop] extends t.Node[]
+    ? t.Node[]
+    : Obj[Prop];
+}>;
+
+interface BaseNodePathValidators {
 `;
 
   for (const type of [...t.TYPES].sort()) {
-    output += `is${type}(opts?: object): this is NodePath<t.${type}>;`;
-  }
-
-  for (const type of Object.keys(virtualTypes)) {
-    const { types } = virtualTypes[type];
-    if (type[0] === "_") continue;
-    if (definitions.NODE_FIELDS[type] || definitions.FLIPPED_ALIAS_KEYS[type]) {
-      output += `is${type}(opts?: object): this is NodePath<t.${type}>;`;
-    } else if (types /* in VirtualTypeAliases */) {
-      output += `is${type}(opts?: object): this is NodePath<VirtualTypeAliases["${type}"]>;`;
-    } else {
-      // if it don't have types, then VirtualTypeAliases[type] is t.Node
-      // which TS marked as always true
-      // eg. if (path.isBlockScope()) return;
-      //     path resolved to `never` here
-      // so we have to return boolean instead of this is NodePath<t.Node> here
-      output += `is${type}(opts?: object): boolean;`;
-    }
+    output += `is${type}(this: NodePath, opts?: Opts<t.${type}>): this is NodePath<t.${type}>;`;
   }
 
   output += `
 }
+
+export interface NodePathValidators
+  extends Omit<BaseNodePathValidators, keyof VirtualTypeNodePathValidators>,
+    VirtualTypeNodePathValidators {}
 `;
 
   return output;

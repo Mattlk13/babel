@@ -1,30 +1,35 @@
 import traverse from "@babel/traverse";
 import type * as t from "@babel/types";
-type SourceMap = any;
+import type { GeneratorResult } from "@babel/generator";
+
 import type { Handler } from "gensync";
 
-import type { ResolvedConfig, PluginPasses } from "../config";
+import type { ResolvedConfig, Plugin, PluginPasses } from "../config/index.ts";
 
-import PluginPass from "./plugin-pass";
-import loadBlockHoistPlugin from "./block-hoist-plugin";
-import normalizeOptions from "./normalize-opts";
-import normalizeFile from "./normalize-file";
+import PluginPass from "./plugin-pass.ts";
+import loadBlockHoistPlugin from "./block-hoist-plugin.ts";
+import normalizeOptions from "./normalize-opts.ts";
+import normalizeFile from "./normalize-file.ts";
 
-import generateCode from "./file/generate";
-import type File from "./file/file";
+import generateCode from "./file/generate.ts";
+import type File from "./file/file.ts";
+
+import { flattenToSet } from "../config/helpers/deep-array.ts";
+import { isAsync, maybeAsync } from "../gensync-utils/async.ts";
 
 export type FileResultCallback = {
-  (err: Error, file: null): any;
-  (err: null, file: FileResult | null): any;
+  (err: Error, file: null): void;
+  (err: null, file: FileResult | null): void;
 };
 
 export type FileResult = {
-  metadata: {};
-  options: {};
-  ast: {} | null;
+  metadata: { [key: string]: any };
+  options: { [key: string]: any };
+  ast: t.File | null;
   code: string | null;
-  map: SourceMap | null;
-  sourceType: "string" | "module";
+  map: GeneratorResult["map"] | null;
+  sourceType: "script" | "module";
+  externalDependencies: Set<string>;
 };
 
 export function* run(
@@ -43,7 +48,7 @@ export function* run(
   try {
     yield* transformFile(file, config.passes);
   } catch (e) {
-    e.message = `${opts.filename ?? "unknown"}: ${e.message}`;
+    e.message = `${opts.filename ?? "unknown file"}: ${e.message}`;
     if (!e.code) {
       e.code = "BABEL_TRANSFORM_ERROR";
     }
@@ -56,7 +61,7 @@ export function* run(
       ({ outputCode, outputMap } = generateCode(config.passes, file));
     }
   } catch (e) {
-    e.message = `${opts.filename ?? "unknown"}: ${e.message}`;
+    e.message = `${opts.filename ?? "unknown file"}: ${e.message}`;
     if (!e.code) {
       e.code = "BABEL_GENERATE_ERROR";
     }
@@ -70,17 +75,20 @@ export function* run(
     code: outputCode === undefined ? null : outputCode,
     map: outputMap === undefined ? null : outputMap,
     sourceType: file.ast.program.sourceType,
+    externalDependencies: flattenToSet(config.externalDependencies),
   };
 }
 
 function* transformFile(file: File, pluginPasses: PluginPasses): Handler<void> {
+  const async = yield* isAsync();
+
   for (const pluginPairs of pluginPasses) {
-    const passPairs = [];
+    const passPairs: [Plugin, PluginPass][] = [];
     const passes = [];
     const visitors = [];
 
     for (const plugin of pluginPairs.concat([loadBlockHoistPlugin()])) {
-      const pass = new PluginPass(file, plugin.key, plugin.options);
+      const pass = new PluginPass(file, plugin.key, plugin.options, async);
 
       passPairs.push([plugin, pass]);
       passes.push(pass);
@@ -88,21 +96,14 @@ function* transformFile(file: File, pluginPasses: PluginPasses): Handler<void> {
     }
 
     for (const [plugin, pass] of passPairs) {
-      const fn = plugin.pre;
-      if (fn) {
-        const result = fn.call(pass, file);
+      if (plugin.pre) {
+        const fn = maybeAsync(
+          plugin.pre,
+          `You appear to be using an async plugin/preset, but Babel has been called synchronously`,
+        );
 
-        // @ts-expect-error - If we want to support async .pre
-        yield* [];
-
-        if (isThenable(result)) {
-          throw new Error(
-            `You appear to be using an plugin with an async .pre, ` +
-              `which your current version of Babel does not support. ` +
-              `If you're using a published plugin, you may need to upgrade ` +
-              `your @babel/core version.`,
-          );
-        }
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        yield* fn.call(pass, file);
       }
     }
 
@@ -112,34 +113,22 @@ function* transformFile(file: File, pluginPasses: PluginPasses): Handler<void> {
       passes,
       file.opts.wrapPluginVisitorMethod,
     );
-    traverse(file.ast, visitor, file.scope);
+    if (process.env.BABEL_8_BREAKING) {
+      traverse(file.ast.program, visitor, file.scope, null, file.path, true);
+    } else {
+      traverse(file.ast, visitor, file.scope);
+    }
 
     for (const [plugin, pass] of passPairs) {
-      const fn = plugin.post;
-      if (fn) {
-        const result = fn.call(pass, file);
+      if (plugin.post) {
+        const fn = maybeAsync(
+          plugin.post,
+          `You appear to be using an async plugin/preset, but Babel has been called synchronously`,
+        );
 
-        // @ts-expect-error - If we want to support async .post
-        yield* [];
-
-        if (isThenable(result)) {
-          throw new Error(
-            `You appear to be using an plugin with an async .post, ` +
-              `which your current version of Babel does not support. ` +
-              `If you're using a published plugin, you may need to upgrade ` +
-              `your @babel/core version.`,
-          );
-        }
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        yield* fn.call(pass, file);
       }
     }
   }
-}
-
-function isThenable<T extends PromiseLike<any>>(val: any): val is T {
-  return (
-    !!val &&
-    (typeof val === "object" || typeof val === "function") &&
-    !!val.then &&
-    typeof val.then === "function"
-  );
 }

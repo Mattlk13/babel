@@ -1,5 +1,5 @@
-import { VISITOR_KEYS } from "../definitions";
-import type * as t from "..";
+import { VISITOR_KEYS } from "../definitions/index.ts";
+import type * as t from "../index.ts";
 
 export type TraversalAncestors = Array<{
   node: t.Node;
@@ -33,7 +33,7 @@ export default function traverse<T>(
     handlers = { enter: handlers };
   }
 
-  const { enter, exit } = handlers as TraversalHandlers<T>;
+  const { enter, exit } = handlers;
 
   traverseSimpleImpl(node, enter, exit, state, []);
 }
